@@ -87,13 +87,42 @@ function collectInput(){
 function renderOutput(out){
   if ($1('#finalRepayment')) $1('#finalRepayment').textContent = `${fmt(out.monthlyRepayment)}원`;
   if ($1('#finalPeriod'))    $1('#finalPeriod').textContent    = `${out.months}개월`;
+  // 디버그(테스트 페이지용)
+  const dbg = $1('#debug');
+  if (dbg) dbg.textContent = JSON.stringify(out, null, 2);
 }
 async function loadRules(){
   const res = await fetch(RULES_URL, { cache:'no-store' });
   if(!res.ok) throw new Error('Failed to load rules');
   return res.json();
 }
+export async function runAssessment(overrideInput){
+  const rules = await loadRules();
+  const input = overrideInput || collectInput();
+  const out   = computeAssessment(input, rules);
+  return out;
+}
 async function calculateAndRender(){
   try{
-    const rules = await loadRules();
-    const input =
+    const out = await runAssessment();
+    renderOutput(out);
+    // (선택) 저장: WEBHOOK_URL 설정 시 입력+결과 전송
+    if (WEBHOOK_URL) {
+      const payload = collectInput();
+      fetch(WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payload, result: out, at: Date.now() })
+      }).catch(()=>{});
+    }
+  } catch(err){
+    console.error(err);
+  }
+}
+
+// ---- 바인딩 ----
+// test.html 용 버튼 바인딩
+document.getElementById('calc')?.addEventListener('click', calculateAndRender);
+
+// 실제 랜딩(모달 결과 단계 진입 시)에서 호출하고 싶다면 아래 함수를 사용하세요.
+// window.runRepaymentCalc = calculateAndRender; // 필요 시 주석 해제

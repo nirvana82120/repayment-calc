@@ -1,5 +1,6 @@
-{
+ {
   "version": "rules-2025-01",
+
   "paymentRate": 0.30,
   "minMonthly": 200000,
   "maxMonthly": 1000000,
@@ -9,6 +10,12 @@
   "carExempt": 5000000,
   "depositExempt": 2000000,
 
+  "basePeriodByAge": {
+    "19-30": 24,
+    "31-64": 36,
+    "65plus": 24
+  },
+
   "costOfLiving": {
     "table": { "1": 1200000, "2": 1600000, "3": 2000000, "4": 2400000 },
     "perExtra": 300000
@@ -17,6 +24,7 @@
   "periodByDebt": [
     { "lte": 10000000, "months": 36 },
     { "lte": 50000000, "months": 48 },
-    { "gt":  50000000, "months": 60 }
+    { "gt": 50000000,  "months": 60 }
   ]
 }
+

@@ -3,6 +3,10 @@
 
 export function computeAssessment(input, rules) {
   const {
+    // ✅ 새로 추가: 나이대별 기본기간
+    basePeriodByAge = { "19-30": 24, "31-64": 36, "65plus": 24 },
+
+    // 기존 규칙들(그대로 유지)
     paymentRate = 0.30,
     minMonthly = 200000,
     maxMonthly = 1000000,
@@ -31,27 +35,39 @@ export function computeAssessment(input, rules) {
   const carNet = Math.max(0, assets.carTotal - assets.carLoanTotal);
   const carAdj = Math.max(0, carNet - carExempt);
 
-  const rentDepositSum = assets.rentItems.reduce((s, it) => s + (it.deposit||0), 0);
-  const jeonseNet = assets.jeonseItems.reduce((s, it) => s + Math.max(0, (it.deposit||0) - (it.loan||0)), 0);
-  const ownEquity = assets.ownItems.reduce((s, it) => s + Math.max(0, (it.price||0) - (it.loan||0)), 0);
+  const rentDepositSum = assets.rentItems.reduce((s, it) => s + (it.deposit || 0), 0);
+  const jeonseNet = assets.jeonseItems.reduce(
+    (s, it) => s + Math.max(0, (it.deposit || 0) - (it.loan || 0)),
+    0
+  );
+  const ownEquity = assets.ownItems.reduce(
+    (s, it) => s + Math.max(0, (it.price || 0) - (it.loan || 0)),
+    0
+  );
 
-  const depositsAdj  = Math.max(0, (assets.deposits||0)  - depositExempt);
-  const insuranceAdj = Math.max(0, (assets.insurance||0));
-  const securitiesAdj= Math.max(0, (assets.securities||0));
+  const depositsAdj   = Math.max(0, (assets.deposits || 0)   - depositExempt);
+  const insuranceAdj  = Math.max(0, (assets.insurance || 0));
+  const securitiesAdj = Math.max(0, (assets.securities || 0));
 
   const adjustedAssets =
-      Math.max(0, rentDepositSum) * rentToAssetRate +
-      Math.max(0, jeonseNet)      * rentToAssetRate +
-      ownEquity + carAdj + depositsAdj + insuranceAdj + securitiesAdj;
+    Math.max(0, rentDepositSum) * rentToAssetRate +
+    Math.max(0, jeonseNet)      * rentToAssetRate +
+    ownEquity + carAdj + depositsAdj + insuranceAdj + securitiesAdj;
 
   // 4) 월 변제금 = 가처분 × 변제율 (+ 하한/상한, n만원 단위 반올림)
   let monthly = disposable * paymentRate;
   monthly = clamp(monthly, minMonthly, maxMonthly);
   monthly = roundBy(monthly, roundingUnit);
 
-  // 5) 변제기간(총채무 구간별 규칙)
+  // 5) 변제기간: ✅ 이번 단계는 '나이대 기준'을 우선 적용
+  const ageBand = input?.meta?.ageBand || input?.ageBand || "31-64";
+  const monthsByAge = basePeriodByAge[ageBand] ?? 36;
+
+  // (채무 구간 규칙은 다음 단계에서 함께 고려 예정)
   const totalDebt = Math.max(0, Number(input.debts?.total || 0));
-  const months = pickMonthsByDebt(totalDebt, periodByDebt);
+  const monthsDebtRule = pickMonthsByDebt(totalDebt, periodByDebt); // 보존(아직 미적용)
+
+  const months = monthsByAge; // ← 현재 단계에서는 나이대 기준만 반영
 
   return {
     rulesVersion: version,
@@ -65,8 +81,15 @@ export function computeAssessment(input, rules) {
       totalDebt,
       adjustedAssets,
       components: {
-        rentDepositSum, jeonseNet, ownEquity, carAdj, depositsAdj, insuranceAdj, securitiesAdj
-      }
+        rentDepositSum,
+        jeonseNet,
+        ownEquity,
+        carAdj,
+        depositsAdj,
+        insuranceAdj,
+        securitiesAdj
+      },
+      debug: { monthsByAge, monthsDebtRule }
     }
   };
 }
