@@ -1,18 +1,20 @@
 // app-wire.js — 외부 엔진으로 계산/렌더 (CDN 커밋해시 고정 버전)
 
 // ===== 커밋 해시 고정(매우 중요) =====
-const COMMIT = '23b09d4';  // 최신 커밋 해시
+const COMMIT = '71f6f10';  // ← 방금 만든 최신 커밋 해시 7자리로 교체
 
-// 캐시 무력화용 v 값도 새로 변경
-const ENGINE_URL = `https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@${COMMIT}/engine.js?v=2025-09-14-02`;
-const RULES_URL  = `https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@${COMMIT}/rules-2025-01.json?v=2025-09-14-02`;
-
+// 외부 엔진/룰 절대경로 (커밋 고정) + 캐시무력화 쿼리
+const ENGINE_URL = `https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@${COMMIT}/engine.js?v=2025-09-14-05`;
+const RULES_URL  = `https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@${COMMIT}/rules-2025-01.json?v=2025-09-14-05`;
 
 // (선택) 결과 수집용 웹훅
 const WEBHOOK_URL = '';
 
 // ---- 엔진 import(절대경로 고정) ----
+// *중요*: 일부 환경에서 변수 import가 막히면, 동적 import 방식으로 교체하세요(주석 참고).
 import { computeAssessment } from ENGINE_URL;
+// 동적 import 대안:
+// let computeAssessment; (async () => { ({ computeAssessment } = await import(ENGINE_URL)); })();
 
 // ---- 유틸 ----
 const $1   = (sel,root=document)=> root.querySelector(sel);
@@ -26,14 +28,8 @@ function getKidsCountMarried(){
   if (active === 'other') return toNum($1('#kidsOtherNum')?.value);
   return Number(active||0);
 }
-function getDivorceCareType(){
-  return $1('#divorceCareChips .chip.active')?.dataset.care || null; // "self"|"ex"|null
-}
-function getDivorceKids(){
-  const btn = $1('#divorceKidsChips .chip.active');
-  const n = btn?.dataset.divorcekids;
-  return n ? Number(n) : 0;
-}
+function getDivorceCareType(){ return $1('#divorceCareChips .chip.active')?.dataset.care || null; }
+function getDivorceKids(){ const btn = $1('#divorceKidsChips .chip.active'); const n = btn?.dataset.divorcekids; return n ? Number(n) : 0; }
 function getHouseholdSize(){
   const marital = $1('#maritalGrid .region-btn.active')?.dataset.marital;
   if (marital === 'married') return 1 + (getKidsCountMarried()||0);
@@ -42,7 +38,7 @@ function getHouseholdSize(){
     if (care === 'self') return 1 + (getDivorceKids()||0);
     if (care === 'ex')   return 1;
   }
-  return 1; // single/widowed default
+  return 1;
 }
 
 // ---------- 수집 ----------
@@ -64,7 +60,7 @@ function collectAssets(){
   const rent = $all('#propRentList .rent-item').map(it=>({
     deposit: toNum($1('input[data-field="deposit"]', it)?.value),
     monthly: toNum($1('input[data-field="monthly"]', it)?.value),
-    type: $1('.rent-type .chip.active', it)?.dataset.renttype || '' // "home"|"work"
+    type: $1('.rent-type .chip.active', it)?.dataset.renttype || ''
   }));
   const jeonse = $all('#propJeonseList .jeonse-item').map(it=>({
     deposit: toNum($1('input[data-field="deposit"]', it)?.value),
@@ -161,7 +157,7 @@ async function calculateAndRender(){
 
 // 결과 스텝(10) 열릴 때 계산
 document.addEventListener('DOMContentLoaded', ()=>{
-  window.__runAssessment = runAssessment; // 수동 테스트
+  window.__runAssessment = runAssessment; // 수동 테스트용
   const resultSection = document.querySelector('section.cm-step[data-step="10"]');
   if (!resultSection) return;
   if (!resultSection.hidden) calculateAndRender();
