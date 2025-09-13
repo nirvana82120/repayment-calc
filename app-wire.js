@@ -1,7 +1,7 @@
 // app-wire.js — 외부 엔진으로 계산/렌더 (CDN 커밋해시 고정 버전)
 
 // ===== 커밋 해시 고정(매우 중요) =====
-const COMMIT = '63077b0';  // 최신 커밋 해시
+const COMMIT = '6988431';  // 최신 커밋 해시
 
 // 캐시 무력화용 v 값도 새로 변경
 const ENGINE_URL = `https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@${COMMIT}/engine.js?v=2025-09-14-02`;
