@@ -1,11 +1,11 @@
 // app-wire.js — 외부 엔진으로 계산/렌더 (CDN 커밋해시 고정 버전)
 
 // ===== 커밋 해시 고정(매우 중요) =====
-const COMMIT = '7f75d3c';  // 최신 커밋 해시
+const COMMIT = '63077b0';  // 최신 커밋 해시
 
 // 캐시 무력화용 v 값도 새로 변경
-const ENGINE_URL = `https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@${COMMIT}/engine.js?v=2025-09-14-01`;
-const RULES_URL  = `https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@${COMMIT}/rules-2025-01.json?v=2025-09-14-01`;
+const ENGINE_URL = `https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@${COMMIT}/engine.js?v=2025-09-14-02`;
+const RULES_URL  = `https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@${COMMIT}/rules-2025-01.json?v=2025-09-14-02`;
 
 
 // (선택) 결과 수집용 웹훅
