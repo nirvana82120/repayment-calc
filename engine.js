@@ -5,7 +5,7 @@ export function computeAssessment(input, rules){
     // === 핵심: 가처분 100% 반영 ===
     paymentRate = 1.0,
     minMonthly  = 200000,
-    maxMonthly  = 1000000,
+    maxMonthly  = 1000000,           // rules에서 null이 오면 아래에서 Infinity 처리
     roundingUnit= 10000,
 
     // 자산/보증금/면제 룰
@@ -44,10 +44,16 @@ export function computeAssessment(input, rules){
     else if (careType === 'ex') livingAdjusted = Math.max(0, onePerson - supportFromEx);
   }
 
-  // 2) 가처분/기본 월 변제금
+  // 2) 가처분/기본 월 변제금 (상한 해제 대응)
   const monthlyIncome = Math.max(0, Number(input.monthlyIncome||0));
   const disposable    = Math.max(0, monthlyIncome - livingAdjusted);
-  let baseMonthly = clamp(roundBy(disposable * paymentRate, roundingUnit), minMonthly, maxMonthly);
+
+  const effectiveMax = Number.isFinite(maxMonthly) ? maxMonthly : Infinity;  // ★ 상한 해제
+  let baseMonthly = clamp(
+    roundBy(disposable * paymentRate, roundingUnit),
+    minMonthly,
+    effectiveMax
+  );
 
   // 3) 자산 계산
   const assetCalc = computeAssets(input, rules);
@@ -71,14 +77,14 @@ export function computeAssessment(input, rules){
   const ageKey  = input?.meta?.ageBand || '';
   const baseMon = basePeriodByAge[ageKey] ?? 36;
 
-  // 6) 제약 충족 시나리오 계산
+  // 6) 제약 충족 시나리오 계산 (세금 1/2 규칙 포함)
   const scenarioA = solvePlan({
     wantMonths: baseMon,
     baseMonthly,
     assets: assetsEffective,
     tax,
     totalDebt: totalDebtUsed,
-    roundingUnit, minMonthly, maxMonthly
+    roundingUnit, minMonthly, maxMonthly: effectiveMax
   });
 
   const scenarioB = solvePlan({
@@ -87,7 +93,7 @@ export function computeAssessment(input, rules){
     assets: assetsEffective,
     tax,
     totalDebt: totalDebtUsed,
-    roundingUnit, minMonthly, maxMonthly
+    roundingUnit, minMonthly, maxMonthly: effectiveMax
   });
 
   // 더 낮은 월변제금을 기본 출력으로
@@ -96,7 +102,7 @@ export function computeAssessment(input, rules){
   // 7) 총채무보다 많이 내는 경우 → 기간 단축 (연장 금지)
   best = maybeShortenMonths(best.monthly, best.months, totalDebtUsed, roundingUnit, tax);
 
-  // 8) 세금 1/2 규칙 생계비 경고
+  // 8) 세금 1/2 규칙으로 인한 생계비 1/2 하락 경고
   const requiredDisposable = best.monthly / (paymentRate || 1);
   const impliedLiving = monthlyIncome - requiredDisposable;
   const livingTooLow = impliedLiving < (livingAdjusted / 2);

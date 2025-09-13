@@ -3,7 +3,7 @@
 
   "paymentRate": 1.0,
   "minMonthly": 200000,
-  "maxMonthly": 1000000,
+  "maxMonthly": null,                         // ← 상한 해제
   "roundingUnit": 10000,
 
   "rentToAssetRate": 0.5,
