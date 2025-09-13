@@ -1,17 +1,18 @@
-// app-wire.js — 외부 엔진으로 계산/렌더 (상대경로 + 캐시버전)
+// app-wire.js — 외부 엔진으로 계산/렌더 (CDN 커밋해시 고정 버전)
 
-// 캐시 무력화용 버전 문자열 (변경 시 새로고침 강제)
-const VER = '2025-09-13-08';
+// ===== 커밋 해시 고정(매우 중요) =====
+const COMMIT = '7f75d3c';  // 최신 커밋 해시
 
-// BASE: app-wire.js가 로드된 위치(해시/브랜치 상관 없이 그 기준을 따름)
-const BASE = new URL('.', import.meta.url);
+// 캐시 무력화용 v 값도 새로 변경
+const ENGINE_URL = `https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@${COMMIT}/engine.js?v=2025-09-14-01`;
+const RULES_URL  = `https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@${COMMIT}/rules-2025-01.json?v=2025-09-14-01`;
 
-// 같은 디렉토리의 engine.js / rules-2025-01.json을 항상 “같은 경로/해시”로 로드
-const ENGINE_URL = new URL('engine.js', BASE).href + `?v=${VER}`;
-const RULES_URL  = new URL('rules-2025-01.json', BASE).href + `?v=${VER}`;
 
 // (선택) 결과 수집용 웹훅
-const WEBHOOK_URL = ''; // 필요 시 입력
+const WEBHOOK_URL = '';
+
+// ---- 엔진 import(절대경로 고정) ----
+import { computeAssessment } from ENGINE_URL;
 
 // ---- 유틸 ----
 const $1   = (sel,root=document)=> root.querySelector(sel);
@@ -132,20 +133,13 @@ function renderOutput(out){
   console.log('[assessment]', out);
 }
 
-// ---------- 엔진/룰 로드 + 실행 ----------
-let _engineMod = null;
-async function loadEngine(){
-  if (_engineMod) return _engineMod;
-  _engineMod = await import(ENGINE_URL);
-  return _engineMod;
-}
+// ---------- 실행 ----------
 async function loadRules(){
   const res = await fetch(RULES_URL, { cache:'no-store' });
   if(!res.ok) throw new Error('Failed to load rules');
   return res.json();
 }
 export async function runAssessment(overrideInput){
-  const { computeAssessment } = await loadEngine();
   const rules = await loadRules();
   const input = overrideInput || collectInput();
   return computeAssessment(input, rules);
@@ -167,7 +161,7 @@ async function calculateAndRender(){
 
 // 결과 스텝(10) 열릴 때 계산
 document.addEventListener('DOMContentLoaded', ()=>{
-  window.__runAssessment = runAssessment; // 디버깅용
+  window.__runAssessment = runAssessment; // 수동 테스트
   const resultSection = document.querySelector('section.cm-step[data-step="10"]');
   if (!resultSection) return;
   if (!resultSection.hidden) calculateAndRender();
