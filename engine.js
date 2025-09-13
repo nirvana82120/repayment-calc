@@ -44,7 +44,7 @@ export function computeAssessment(input, rules){
     else if (careType === 'ex') livingAdjusted = Math.max(0, onePerson - supportFromEx);
   }
 
-  // 2) 가처분/기본 월 변제금 (가처분*paymentRate; paymentRate=1.0이므로 100%)
+  // 2) 가처분/기본 월 변제금
   const monthlyIncome = Math.max(0, Number(input.monthlyIncome||0));
   const disposable    = Math.max(0, monthlyIncome - livingAdjusted);
   let baseMonthly = clamp(roundBy(disposable * paymentRate, roundingUnit), minMonthly, maxMonthly);
@@ -58,7 +58,7 @@ export function computeAssessment(input, rules){
   const credit = Number(debts.credit||0);
   const tax    = Number(debts.tax||0);
   const priv   = Number(debts.private||0);
-  const secured= Number(debts.secured||0); // 기록용
+  const secured= Number(debts.secured||0);
   const totalDebtUsed = credit + tax + priv;
   const totalDebtAll  = totalDebtUsed + secured;
 
@@ -71,7 +71,7 @@ export function computeAssessment(input, rules){
   const ageKey  = input?.meta?.ageBand || '';
   const baseMon = basePeriodByAge[ageKey] ?? 36;
 
-  // 6) 제약 충족 시나리오 계산 (세금 1/2 규칙 포함)
+  // 6) 제약 충족 시나리오 계산
   const scenarioA = solvePlan({
     wantMonths: baseMon,
     baseMonthly,
@@ -93,11 +93,11 @@ export function computeAssessment(input, rules){
   // 더 낮은 월변제금을 기본 출력으로
   let best = scenarioA.monthly <= scenarioB.monthly ? scenarioA : scenarioB;
 
-  // 7) 총채무보다 많이 내는 경우 → 기간 단축
+  // 7) 총채무보다 많이 내는 경우 → 기간 단축 (연장 금지)
   best = maybeShortenMonths(best.monthly, best.months, totalDebtUsed, roundingUnit, tax);
 
-  // 8) 세금 1/2 규칙으로 인한 생계비 1/2 하락 경고
-  const requiredDisposable = best.monthly / (paymentRate || 1); // paymentRate=1이므로 monthly 자체가 가처분
+  // 8) 세금 1/2 규칙 생계비 경고
+  const requiredDisposable = best.monthly / (paymentRate || 1);
   const impliedLiving = monthlyIncome - requiredDisposable;
   const livingTooLow = impliedLiving < (livingAdjusted / 2);
 
@@ -195,13 +195,21 @@ function solvePlan({ wantMonths, baseMonthly, assets, tax, totalDebt, roundingUn
 
   return { months, monthly, mAssetMin, mTaxMin };
 }
+
 function maybeShortenMonths(monthly, months, totalDebt, roundingUnit, tax){
   if (monthly * months <= 0) return { monthly, months };
+
+  const currentTotal = monthly * months;
+  // ✅ 총채무보다 많이 내는 경우에만 단축, 연장은 금지
+  if (currentTotal <= totalDebt) return { monthly, months };
+
   let newMonths = Math.ceil(totalDebt / monthly);
-  if (newMonths < 1) newMonths = 1;
+  newMonths = Math.max(1, Math.min(months, newMonths));
+
   const half = Math.max(1, Math.floor(newMonths/2));
   const mTaxMin = tax > 0 ? Math.ceil(tax / half / roundingUnit) * roundingUnit : 0;
-  let newMonthly = Math.max(monthly, mTaxMin);
+  const newMonthly = Math.max(monthly, mTaxMin);
+
   return { monthly: newMonthly, months: newMonths, mTaxMin };
 }
 
