@@ -1,11 +1,11 @@
-// engine.js — 입력 + 룰 → 결과(요청 로직 종합 반영)
+// engine.js — 입력 + 룰 → 결과
 
 export function computeAssessment(input, rules){
   const {
     // === 핵심: 가처분 100% 반영 ===
     paymentRate = 1.0,
     minMonthly  = 200000,
-    maxMonthly  = 1000000,           // rules에서 null이 오면 아래에서 Infinity 처리
+    maxMonthly  = 1000000,           // rules에서 null이면 아래에서 Infinity 처리
     roundingUnit= 10000,
 
     // 자산/보증금/면제 룰
@@ -48,7 +48,7 @@ export function computeAssessment(input, rules){
   const monthlyIncome = Math.max(0, Number(input.monthlyIncome||0));
   const disposable    = Math.max(0, monthlyIncome - livingAdjusted);
 
-  const effectiveMax = Number.isFinite(maxMonthly) ? maxMonthly : Infinity;  // ★ 상한 해제
+  const effectiveMax = Number.isFinite(maxMonthly) ? maxMonthly : Infinity;  // ★ 상한 해제 핵심
   let baseMonthly = clamp(
     roundBy(disposable * paymentRate, roundingUnit),
     minMonthly,
@@ -77,7 +77,7 @@ export function computeAssessment(input, rules){
   const ageKey  = input?.meta?.ageBand || '';
   const baseMon = basePeriodByAge[ageKey] ?? 36;
 
-  // 6) 제약 충족 시나리오 계산 (세금 1/2 규칙 포함)
+  // 6) 시나리오 계산 (세금 1/2 규칙 포함)
   const scenarioA = solvePlan({
     wantMonths: baseMon,
     baseMonthly,
@@ -206,7 +206,7 @@ function maybeShortenMonths(monthly, months, totalDebt, roundingUnit, tax){
   if (monthly * months <= 0) return { monthly, months };
 
   const currentTotal = monthly * months;
-  // ✅ 총채무보다 많이 내는 경우에만 단축, 연장은 금지
+  // ✅ 총채무보다 많이 내는 경우에만 단축 (연장은 금지)
   if (currentTotal <= totalDebt) return { monthly, months };
 
   let newMonths = Math.ceil(totalDebt / monthly);
