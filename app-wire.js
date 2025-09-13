@@ -5,9 +5,9 @@ const ASSET_VER = '2025-09-13-03';
 const RULES_VER = '2025-09-13-03';
 
 // ── 엔진/룰 절대경로 (상대경로 사용 금지)
-import { computeAssessment } from 'https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@main/engine.js?v=' + ASSET_VER;
+import { computeAssessment } from 'https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@1c235ba/engine.js?v=' + ASSET_VER;
 const RULES_URL =
-  'https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@main/rules-2025-01.json?v=' + RULES_VER;
+  'https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@1c235ba/rules-2025-01.json?v=' + RULES_VER;
 
 // (선택) 결과 수집용 웹훅
 const WEBHOOK_URL = '';
