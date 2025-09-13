@@ -2,18 +2,21 @@
 
 export function computeAssessment(input, rules){
   const {
-    paymentRate = 0.30,
+    // === 핵심: 가처분 100% 반영 ===
+    paymentRate = 1.0,
     minMonthly  = 200000,
     maxMonthly  = 1000000,
     roundingUnit= 10000,
 
+    // 자산/보증금/면제 룰
     rentToAssetRate = 0.5,
-
     depositExempt   = 1850000,
     insuranceExempt = 1500000,
 
-    costOfLiving = { table:{ "1":1430000 }, perExtra:640000 },
+    // 생계비 테이블
+    costOfLiving = { table:{ "1":1430000, "2":2350000, "3":3010000, "4":3650000 }, perExtra:640000 },
 
+    // 기본 기간(나이대)
     basePeriodByAge = { "19-30":24, "31-64":36, "65plus":24 },
 
     rentDepositPolicy = {},
@@ -41,17 +44,16 @@ export function computeAssessment(input, rules){
     else if (careType === 'ex') livingAdjusted = Math.max(0, onePerson - supportFromEx);
   }
 
-  // 2) 가처분/기본 월 변제금
+  // 2) 가처분/기본 월 변제금 (가처분*paymentRate; paymentRate=1.0이므로 100%)
   const monthlyIncome = Math.max(0, Number(input.monthlyIncome||0));
   const disposable    = Math.max(0, monthlyIncome - livingAdjusted);
-
   let baseMonthly = clamp(roundBy(disposable * paymentRate, roundingUnit), minMonthly, maxMonthly);
 
-  // 3) 자산 계산 (요청 룰)
+  // 3) 자산 계산
   const assetCalc = computeAssets(input, rules);
   const assetsEffective = assetCalc.total;
 
-  // 4) 채무 합계 (담보 제외: 신용+세금+개인)
+  // 4) 채무 합계 (담보 제외)
   const debts = input?.debts?.byType || {};
   const credit = Number(debts.credit||0);
   const tax    = Number(debts.tax||0);
@@ -69,7 +71,7 @@ export function computeAssessment(input, rules){
   const ageKey  = input?.meta?.ageBand || '';
   const baseMon = basePeriodByAge[ageKey] ?? 36;
 
-  // 6) 제약 충족 시나리오 계산
+  // 6) 제약 충족 시나리오 계산 (세금 1/2 규칙 포함)
   const scenarioA = solvePlan({
     wantMonths: baseMon,
     baseMonthly,
@@ -80,7 +82,7 @@ export function computeAssessment(input, rules){
   });
 
   const scenarioB = solvePlan({
-    wantMonths: Math.max(baseMon, 60), // 60개월 대안
+    wantMonths: Math.max(baseMon, 60),
     baseMonthly,
     assets: assetsEffective,
     tax,
@@ -92,12 +94,10 @@ export function computeAssessment(input, rules){
   let best = scenarioA.monthly <= scenarioB.monthly ? scenarioA : scenarioB;
 
   // 7) 총채무보다 많이 내는 경우 → 기간 단축
-  const shorten = maybeShortenMonths(best.monthly, best.months, totalDebtUsed, roundingUnit, tax);
-  best = shorten;
+  best = maybeShortenMonths(best.monthly, best.months, totalDebtUsed, roundingUnit, tax);
 
-  // 8) 세금 1/2 규칙으로 인해 올린 월변제금이
-  //    '생계비의 1/2 이하'로 떨어지게 만드는지 체크(보류 경고)
-  const requiredDisposable = best.monthly / paymentRate;
+  // 8) 세금 1/2 규칙으로 인한 생계비 1/2 하락 경고
+  const requiredDisposable = best.monthly / (paymentRate || 1); // paymentRate=1이므로 monthly 자체가 가처분
   const impliedLiving = monthlyIncome - requiredDisposable;
   const livingTooLow = impliedLiving < (livingAdjusted / 2);
 
@@ -118,16 +118,13 @@ export function computeAssessment(input, rules){
       disposable,
       assets: assetCalc,
       debts: { credit, tax, private: priv, secured, totalDebtUsed, totalDebtAll },
-      options: {
-        basePlan: scenarioA,
-        max60Plan: scenarioB
-      },
+      options: { basePlan: scenarioA, max60Plan: scenarioB },
       flags
     }
   };
 }
 
-// ---------- 자산 계산(요청 규칙) ----------
+// ---------- 자산 계산 ----------
 function computeAssets(input, rules){
   const a = normalizeAssets(input?.assets);
   const policy = rules?.rentDepositPolicy || {};
@@ -135,11 +132,8 @@ function computeAssets(input, rules){
   const overCities  = new Set(policy.overCities || []);
   const metroCities = new Set(policy.metroCities || []);
 
-  // 주거 월세(거주지) — 첫 한건만 지역기준/차감 적용, 나머지는 전액
-  // 사업장 월세 — 보증금 전액
   const homeCity = input?.meta?.home?.city || input?.meta?.home?.region || '';
   const cat = pickCityCategory(homeCity, overCities, metroCities);
-
   const catRule = cats[cat] || cats.other || { threshold:0, deduct:0 };
 
   const homeRent = a.rent.filter(r=>r.type==='home');
@@ -147,14 +141,12 @@ function computeAssets(input, rules){
 
   let rentHomeAdj = 0;
   if (homeRent.length > 0) {
-    // 첫 건
     const first = homeRent[0];
     if ((first.deposit||0) <= catRule.threshold){
       rentHomeAdj += Math.max(0, (first.deposit||0) - catRule.deduct);
     } else {
       rentHomeAdj += (first.deposit||0);
     }
-    // 두 번째부터는 전액
     for (let i=1;i<homeRent.length;i++){
       rentHomeAdj += (homeRent[i].deposit||0);
     }
@@ -162,23 +154,13 @@ function computeAssets(input, rules){
   let rentWorkAdj = workRent.reduce((s,r)=> s + (r.deposit||0), 0);
   const rentAdjTotal = rentHomeAdj + rentWorkAdj;
 
-  // 전세: deposit - loan
   const jeonseAdj = a.jeonse.reduce((s,j)=> s + Math.max(0, (j.deposit||0) - (j.loan||0)), 0);
+  const ownAdj    = a.own.reduce((s,o)=> s + Math.max(0, (o.price||0) - (o.loan||0)), 0);
+  const carAdj    = a.cars.reduce((s,c)=> s + Math.max(0, (c.price||0) - (c.loan||0)), 0);
 
-  // 자가: price - loan
-  const ownAdj = a.own.reduce((s,o)=> s + Math.max(0, (o.price||0) - (o.loan||0)), 0);
-
-  // 자동차: price - loan
-  const carAdj = a.cars.reduce((s,c)=> s + Math.max(0, (c.price||0) - (c.loan||0)), 0);
-
-  // 예적금: -1,850,000 (음수 → 0)
-  const depositsAdj  = Math.max(0, (a.deposits||0) - (rules.depositExempt||0));
-
-  // 보험환급금: -1,500,000 (음수 → 0)
-  const insuranceAdj = Math.max(0, (a.insurance||0) - (rules.insuranceExempt||0));
-
-  // 주식/코인: 전액
-  const securitiesAdj= Math.max(0, (a.securities||0));
+  const depositsAdj   = Math.max(0, (a.deposits||0)  - (rules.depositExempt||0));
+  const insuranceAdj  = Math.max(0, (a.insurance||0) - (rules.insuranceExempt||0));
+  const securitiesAdj = Math.max(0, (a.securities||0));
 
   const total = rentAdjTotal + jeonseAdj + ownAdj + carAdj + depositsAdj + insuranceAdj + securitiesAdj;
 
@@ -213,13 +195,10 @@ function solvePlan({ wantMonths, baseMonthly, assets, tax, totalDebt, roundingUn
 
   return { months, monthly, mAssetMin, mTaxMin };
 }
-
 function maybeShortenMonths(monthly, months, totalDebt, roundingUnit, tax){
-  // 채무가 더 적으면 기간 단축 (세금 1/2 규칙도 유지 가능한지 재확인)
   if (monthly * months <= 0) return { monthly, months };
   let newMonths = Math.ceil(totalDebt / monthly);
   if (newMonths < 1) newMonths = 1;
-  // 세금조건 재확인
   const half = Math.max(1, Math.floor(newMonths/2));
   const mTaxMin = tax > 0 ? Math.ceil(tax / half / roundingUnit) * roundingUnit : 0;
   let newMonthly = Math.max(monthly, mTaxMin);
@@ -228,12 +207,7 @@ function maybeShortenMonths(monthly, months, totalDebt, roundingUnit, tax){
 
 // ---------- 공통 유틸 ----------
 function disallow(msg){
-  return {
-    rulesVersion: "rules-2025-01",
-    monthlyRepayment: 0,
-    months: 0,
-    breakdown: { flags: [msg] }
-  };
+  return { rulesVersion: "rules-2025-01", monthlyRepayment: 0, months: 0, breakdown: { flags: [msg] } };
 }
 function getLivingCost(size, col){
   const table = col?.table || {};

@@ -1,7 +1,7 @@
 {
   "version": "rules-2025-01",
 
-  "paymentRate": 0.30,
+  "paymentRate": 1.0,
   "minMonthly": 200000,
   "maxMonthly": 1000000,
   "roundingUnit": 10000,

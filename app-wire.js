@@ -1,29 +1,29 @@
-// app-wire.js — 외부 엔진으로 계산/렌더 (CDN 절대경로 버전)
+// app-wire.js — 외부 엔진으로 계산/렌더 (상대경로 + 캐시버전)
 
-// ── 캐시 무력화를 위한 버전 문자열 (필요 시 둘 다 올려주세요)
-const ASSET_VER = '2025-09-13-03';
-const RULES_VER = '2025-09-13-03';
+// 캐시 무력화용 버전 문자열 (변경 시 새로고침 강제)
+const VER = '2025-09-13-08';
 
-// ── 엔진/룰 절대경로 (상대경로 사용 금지)
-import { computeAssessment } from 'https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@1c235ba/engine.js?v=' + ASSET_VER;
-const RULES_URL =
-  'https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@1c235ba/rules-2025-01.json?v=' + RULES_VER;
+// BASE: app-wire.js가 로드된 위치(해시/브랜치 상관 없이 그 기준을 따름)
+const BASE = new URL('.', import.meta.url);
+
+// 같은 디렉토리의 engine.js / rules-2025-01.json을 항상 “같은 경로/해시”로 로드
+const ENGINE_URL = new URL('engine.js', BASE).href + `?v=${VER}`;
+const RULES_URL  = new URL('rules-2025-01.json', BASE).href + `?v=${VER}`;
 
 // (선택) 결과 수집용 웹훅
-const WEBHOOK_URL = '';
+const WEBHOOK_URL = ''; // 필요 시 입력
 
-// ───────────────────────────────────────────────────────────────
-// utils
-const $1   = (sel, root = document) => root.querySelector(sel);
-const $all = (sel, root = document) => Array.from(root.querySelectorAll(sel));
-const toNum= (v) => Number(String(v ?? '').replace(/[^\d]/g, '')) || 0;
-const fmt  = (n) => (Number(n) || 0).toLocaleString('ko-KR');
+// ---- 유틸 ----
+const $1   = (sel,root=document)=> root.querySelector(sel);
+const $all = (sel,root=document)=> Array.from(root.querySelectorAll(sel));
+const toNum= (v)=> Number(String(v||'').replace(/[^\d]/g,''))||0;
+const fmt  = (n)=> (Number(n)||0).toLocaleString('ko-KR');
 
 // ---------- Step6 파생 ----------
 function getKidsCountMarried(){
   const active = $1('#kidsChips .chip.active')?.dataset.kids;
   if (active === 'other') return toNum($1('#kidsOtherNum')?.value);
-  return Number(active || 0);
+  return Number(active||0);
 }
 function getDivorceCareType(){
   return $1('#divorceCareChips .chip.active')?.dataset.care || null; // "self"|"ex"|null
@@ -132,14 +132,20 @@ function renderOutput(out){
   console.log('[assessment]', out);
 }
 
-// ---------- 실행 ----------
+// ---------- 엔진/룰 로드 + 실행 ----------
+let _engineMod = null;
+async function loadEngine(){
+  if (_engineMod) return _engineMod;
+  _engineMod = await import(ENGINE_URL);
+  return _engineMod;
+}
 async function loadRules(){
-  // no-store 로 캐시 우회
   const res = await fetch(RULES_URL, { cache:'no-store' });
   if(!res.ok) throw new Error('Failed to load rules');
   return res.json();
 }
 export async function runAssessment(overrideInput){
+  const { computeAssessment } = await loadEngine();
   const rules = await loadRules();
   const input = overrideInput || collectInput();
   return computeAssessment(input, rules);
@@ -161,7 +167,7 @@ async function calculateAndRender(){
 
 // 결과 스텝(10) 열릴 때 계산
 document.addEventListener('DOMContentLoaded', ()=>{
-  window.__runAssessment = runAssessment; // 수동 테스트용
+  window.__runAssessment = runAssessment; // 디버깅용
   const resultSection = document.querySelector('section.cm-step[data-step="10"]');
   if (!resultSection) return;
   if (!resultSection.hidden) calculateAndRender();
