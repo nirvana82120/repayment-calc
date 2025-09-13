@@ -1,28 +1,29 @@
-// app-wire.js — 외부 엔진으로 계산/렌더
+// app-wire.js — 외부 엔진으로 계산/렌더 (CDN 절대경로 버전)
 
-// 🔧 절대 URL로 고정 + 버전 파라미터로 캐시 무력화(중요)
-const ASSET_VER = '2025-09-13-02';
-import { computeAssessment } from 'https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@main/engine.js?v=2025-09-13-02';
+// ── 캐시 무력화를 위한 버전 문자열 (필요 시 둘 다 올려주세요)
+const ASSET_VER = '2025-09-13-03';
+const RULES_VER = '2025-09-13-03';
 
-
-// 룰 JSON도 CDN 절대경로 + 버전
-const RULES_VER = '2025-09-13-02';
+// ── 엔진/룰 절대경로 (상대경로 사용 금지)
+import { computeAssessment } from 'https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@main/engine.js?v=' + ASSET_VER;
 const RULES_URL =
   'https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@main/rules-2025-01.json?v=' + RULES_VER;
 
-const WEBHOOK_URL = ''; // (선택) 결과 수집용
+// (선택) 결과 수집용 웹훅
+const WEBHOOK_URL = '';
 
+// ───────────────────────────────────────────────────────────────
 // utils
-const $1   = (sel,root=document)=> root.querySelector(sel);
-const $all = (sel,root=document)=> Array.from(root.querySelectorAll(sel));
-const toNum= (v)=> Number(String(v||'').replace(/[^\d]/g,''))||0;
-const fmt  = (n)=> (Number(n)||0).toLocaleString('ko-KR');
+const $1   = (sel, root = document) => root.querySelector(sel);
+const $all = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+const toNum= (v) => Number(String(v ?? '').replace(/[^\d]/g, '')) || 0;
+const fmt  = (n) => (Number(n) || 0).toLocaleString('ko-KR');
 
 // ---------- Step6 파생 ----------
 function getKidsCountMarried(){
   const active = $1('#kidsChips .chip.active')?.dataset.kids;
   if (active === 'other') return toNum($1('#kidsOtherNum')?.value);
-  return Number(active||0);
+  return Number(active || 0);
 }
 function getDivorceCareType(){
   return $1('#divorceCareChips .chip.active')?.dataset.care || null; // "self"|"ex"|null
@@ -133,12 +134,13 @@ function renderOutput(out){
 
 // ---------- 실행 ----------
 async function loadRules(){
+  // no-store 로 캐시 우회
   const res = await fetch(RULES_URL, { cache:'no-store' });
-  if(!res.ok) throw new Error('Failed to load rules: ' + res.status);
+  if(!res.ok) throw new Error('Failed to load rules');
   return res.json();
 }
-export async function runAssessment(overrideInput, overrideRules){
-  const rules = overrideRules || await loadRules();
+export async function runAssessment(overrideInput){
+  const rules = await loadRules();
   const input = overrideInput || collectInput();
   return computeAssessment(input, rules);
 }
@@ -159,7 +161,7 @@ async function calculateAndRender(){
 
 // 결과 스텝(10) 열릴 때 계산
 document.addEventListener('DOMContentLoaded', ()=>{
-  window.__runAssessment = runAssessment; // 수동 테스트
+  window.__runAssessment = runAssessment; // 수동 테스트용
   const resultSection = document.querySelector('section.cm-step[data-step="10"]');
   if (!resultSection) return;
   if (!resultSection.hidden) calculateAndRender();
