@@ -1,7 +1,15 @@
 // app-wire.js — 외부 엔진으로 계산/렌더
-import { computeAssessment } from './engine.js';
 
-const RULES_URL   = new URL('./rules-2025-01.json', import.meta.url);
+// 🔧 절대 URL로 고정 + 버전 파라미터로 캐시 무력화(중요)
+const ASSET_VER = '2025-09-13-02';
+import { computeAssessment } from 'https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@main/engine.js?v=2025-09-13-02';
+
+
+// 룰 JSON도 CDN 절대경로 + 버전
+const RULES_VER = '2025-09-13-02';
+const RULES_URL =
+  'https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@main/rules-2025-01.json?v=' + RULES_VER;
+
 const WEBHOOK_URL = ''; // (선택) 결과 수집용
 
 // utils
@@ -120,19 +128,17 @@ function renderOutput(out){
   const per = $1('#finalPeriod');
   if (rep) rep.textContent = `${fmt(out.monthlyRepayment)}원`;
   if (per) per.textContent = `${out.months}개월`;
-
-  // 옵션/사유를 콘솔에 남겨두면 내일 디버깅 쉬움
   console.log('[assessment]', out);
 }
 
 // ---------- 실행 ----------
 async function loadRules(){
   const res = await fetch(RULES_URL, { cache:'no-store' });
-  if(!res.ok) throw new Error('Failed to load rules');
+  if(!res.ok) throw new Error('Failed to load rules: ' + res.status);
   return res.json();
 }
-export async function runAssessment(overrideInput){
-  const rules = await loadRules();
+export async function runAssessment(overrideInput, overrideRules){
+  const rules = overrideRules || await loadRules();
   const input = overrideInput || collectInput();
   return computeAssessment(input, rules);
 }
