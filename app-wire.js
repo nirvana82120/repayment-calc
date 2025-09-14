@@ -1,20 +1,17 @@
-// app-wire.js — 외부 엔진으로 계산/렌더 (CDN 커밋해시 고정 버전)
+// app-wire.js — 외부 엔진으로 계산/렌더 (커밋 해시 고정)
 
 // ===== 커밋 해시 고정(매우 중요) =====
-const COMMIT = '893161a';  // ← 방금 만든 최신 커밋 해시 7자리로 교체
+const COMMIT = 'ec18d88'; // ← 최신 커밋 7자리로 유지/갱신
 
-// 외부 엔진/룰 절대경로 (커밋 고정) + 캐시무력화 쿼리
-const ENGINE_URL = `https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@${COMMIT}/engine.js?v=2025-09-14-05`;
-const RULES_URL  = `https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@${COMMIT}/rules-2025-01.json?v=2025-09-14-05`;
+// 외부 엔진/룰 절대경로 (커밋 고정) + 캐시 무력화 쿼리
+const ENGINE_URL = `https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@${COMMIT}/engine.js?v=2025-09-14-07`;
+const RULES_URL  = `https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@${COMMIT}/rules-2025-01.json?v=2025-09-14-07`;
 
 // (선택) 결과 수집용 웹훅
 const WEBHOOK_URL = '';
 
-// ---- 엔진 import(절대경로 고정) ----
-// *중요*: 일부 환경에서 변수 import가 막히면, 동적 import 방식으로 교체하세요(주석 참고).
-import { computeAssessment } from ENGINE_URL;
-// 동적 import 대안:
-// let computeAssessment; (async () => { ({ computeAssessment } = await import(ENGINE_URL)); })();
+// ---- 엔진 import(동적 import로 전환) ----
+const enginePromise = import(ENGINE_URL);
 
 // ---- 유틸 ----
 const $1   = (sel,root=document)=> root.querySelector(sel);
@@ -124,8 +121,34 @@ function collectInput(){
 function renderOutput(out){
   const rep = $1('#finalRepayment');
   const per = $1('#finalPeriod');
+  const warnBox = $1('.result-warning ul');
+
+  // 초기화
+  if (warnBox) warnBox.innerHTML = '';
+
+  if (out?.consultOnly) {
+    if (rep) rep.textContent = '전문상담 필요';
+    if (per) per.textContent = '';
+    if (warnBox) {
+      const li = document.createElement('li');
+      li.textContent = (out?.breakdown?.flags?.[0]) || '정확한 진단을 위해 전문상담이 필요합니다.';
+      warnBox.appendChild(li);
+    }
+    console.log('[assessment][consultOnly]', out);
+    return;
+  }
+
   if (rep) rep.textContent = `${fmt(out.monthlyRepayment)}원`;
   if (per) per.textContent = `${out.months}개월`;
+
+  // flags 표시
+  if (warnBox && out?.breakdown?.flags?.length){
+    out.breakdown.flags.forEach(msg=>{
+      const li = document.createElement('li');
+      li.textContent = msg;
+      warnBox.appendChild(li);
+    });
+  }
   console.log('[assessment]', out);
 }
 
@@ -136,14 +159,22 @@ async function loadRules(){
   return res.json();
 }
 export async function runAssessment(overrideInput){
+  const { computeAssessment } = await enginePromise; // ★ 동적 import
   const rules = await loadRules();
   const input = overrideInput || collectInput();
   return computeAssessment(input, rules);
 }
 async function calculateAndRender(){
   try{
+    // Step10 진입 시 "계산중…" 프리셋
+    const rep = $1('#finalRepayment');
+    const per = $1('#finalPeriod');
+    if (rep) rep.textContent = '계산중…';
+    if (per) per.textContent = '';
+
     const out = await runAssessment();
     renderOutput(out);
+
     if (WEBHOOK_URL){
       const payload = collectInput();
       fetch(WEBHOOK_URL, {
@@ -160,7 +191,11 @@ document.addEventListener('DOMContentLoaded', ()=>{
   window.__runAssessment = runAssessment; // 수동 테스트용
   const resultSection = document.querySelector('section.cm-step[data-step="10"]');
   if (!resultSection) return;
+
+  // 이미 열려있다면 즉시
   if (!resultSection.hidden) calculateAndRender();
+
+  // 열릴 때 감지
   const mo = new MutationObserver(()=>{ if (!resultSection.hidden) calculateAndRender(); });
   mo.observe(resultSection, { attributes:true, attributeFilter:['hidden'] });
 });
