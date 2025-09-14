@@ -1,39 +1,42 @@
-// engine.js — 입력 + 룰 → 결과
+// engine.js — 입력 + 룰 → 결과 (2025-09-14 기준 설계 반영)
 
 export function computeAssessment(input, rules){
   const {
-    // === 핵심: 가처분 100% 반영 ===
     paymentRate = 1.0,
     minMonthly  = 200000,
-    maxMonthly  = 1000000,           // rules에서 null이면 아래에서 Infinity 처리
+    maxMonthly  = 1000000,
     roundingUnit= 10000,
-
-    // 자산/보증금/면제 룰
-    rentToAssetRate = 0.5,
     depositExempt   = 1850000,
     insuranceExempt = 1500000,
-
-    // 생계비 테이블
-    costOfLiving = { table:{ "1":1430000, "2":2350000, "3":3010000, "4":3650000 }, perExtra:640000 },
-
-    // 기본 기간(나이대)
+    costOfLiving = { table:{ "1":1430000, "2":2350000, "3":3010000, "4":3650000, "5":4260000 }, perExtra:640000 },
     basePeriodByAge = { "19-30":24, "31-64":36, "65plus":24 },
-
     rentDepositPolicy = {},
-
     version = "rules-2025-01"
   } = rules || {};
 
-  // ===== 불가/보류 1: 5년내 면책 =====
-  if (input?.meta?.dischargeWithin5y) {
-    return disallow("최근 5년 내 면책결정 이력으로 개인회생 신청 곤란(보류/불가 가능성)");
-  }
+  const round10k = (x)=> Math.round(x/roundingUnit)*roundingUnit;
+  const floor10k = (x)=> Math.floor(x/roundingUnit)*roundingUnit;
+  const ceil10k  = (x)=> Math.ceil(x/roundingUnit)*roundingUnit;
+  const clamp    = (x,min,max)=> Math.min(Math.max(x,min), max);
+  const effMax   = Number.isFinite(maxMonthly) ? maxMonthly : Infinity;
+  const MIN_BUSINESS = 300000;
 
-  // 1) 생계비 (가구수 표 + 이혼 보정)
-  const size = Math.max(1, Number(input.householdSize||1));
+  const consult = (msg)=> ({
+    consultOnly: true,
+    rulesVersion: version,
+    monthlyRepayment: 0,
+    months: 0,
+    breakdown: { flags:[msg] }
+  });
+
+  const monthlyIncome = Math.max(0, Number(input?.monthlyIncome||0));
+  if (input?.meta?.dischargeWithin5y) return consult("최근 5년 내 면책결정 이력으로 전문상담 필요");
+  if (monthlyIncome <= 1_000_000)     return consult("소득 합계가 100만원 이하로 전문상담 필요");
+
+  const size = Math.max(1, Number(input?.householdSize||1));
   const livingBase = getLivingCost(size, costOfLiving);
 
-  const careType      = input?.divorce?.care || null; // "self"|"ex"|null
+  const careType      = input?.divorce?.care || null;
   const alimonyPay    = Number(input?.divorce?.alimonyPay||0);
   const supportFromEx = Number(input?.divorce?.supportFromEx||0);
   const onePerson     = getLivingCost(1, costOfLiving);
@@ -41,81 +44,69 @@ export function computeAssessment(input, rules){
   let livingAdjusted = livingBase;
   if (input?.meta?.marital === 'divorced') {
     if (careType === 'self') livingAdjusted = Math.max(0, livingBase - alimonyPay);
-    else if (careType === 'ex') livingAdjusted = Math.max(0, onePerson - supportFromEx);
+    else if (careType === 'ex') livingAdjusted = onePerson + supportFromEx; // +지원금(가산)
   }
 
-  // 2) 가처분/기본 월 변제금 (상한 해제 대응)
-  const monthlyIncome = Math.max(0, Number(input.monthlyIncome||0));
-  const disposable    = Math.max(0, monthlyIncome - livingAdjusted);
+  const disposable = Math.max(0, monthlyIncome - livingAdjusted);
 
-  const effectiveMax = Number.isFinite(maxMonthly) ? maxMonthly : Infinity;  // ★ 상한 해제 핵심
-  let baseMonthly = clamp(
-    roundBy(disposable * paymentRate, roundingUnit),
-    minMonthly,
-    effectiveMax
-  );
+  let monthlyBase;
+  if (disposable <= 0)       monthlyBase = MIN_BUSINESS;
+  else if (disposable <= 300000) return consult("가처분 소득이 30만원 이하로 전문상담 필요");
+  else                         monthlyBase = round10k(disposable * (paymentRate || 1));
 
-  // 3) 자산 계산
-  const assetCalc = computeAssets(input, rules);
-  const assetsEffective = assetCalc.total;
+  const assetCalc = computeAssets(input, { rentDepositPolicy, depositExempt, insuranceExempt });
+  const assetsTotal = assetCalc.total;
 
-  // 4) 채무 합계 (담보 제외)
   const debts = input?.debts?.byType || {};
   const credit = Number(debts.credit||0);
   const tax    = Number(debts.tax||0);
   const priv   = Number(debts.private||0);
   const secured= Number(debts.secured||0);
-  const totalDebtUsed = credit + tax + priv;
-  const totalDebtAll  = totalDebtUsed + secured;
 
-  // ===== 불가/보류 2: 재산 > 총채무 =====
-  if (assetsEffective > totalDebtUsed && assetsEffective > 0){
-    return disallow("총재산이 총채무보다 높아 개인회생이 곤란할 수 있습니다(보류/불가 가능성)");
+  const unsecuredTotal = credit + tax + priv;
+  const allDebtTotal   = unsecuredTotal + secured;
+
+  if (unsecuredTotal > 1_0000_0000) return consult("무담보채무가 10억원을 초과하여 전문상담 필요");
+  if (secured        > 1_5000_0000) return consult("담보채무가 15억원을 초과하여 전문상담 필요");
+  if (assetsTotal > unsecuredTotal && assetsTotal > 0) {
+    return consult("총재산이 무담보채무를 초과하여 개인회생 곤란(전문상담 필요)");
   }
 
-  // 5) 기본 기간(나이 우선)
   const ageKey  = input?.meta?.ageBand || '';
-  const baseMon = basePeriodByAge[ageKey] ?? 36;
+  let months = ( { "19-30":24, "31-64":36, "65plus":24, ...basePeriodByAge } )[ageKey] ?? 36;
 
-  // 6) 시나리오 계산 (세금 1/2 규칙 포함)
-  const scenarioA = solvePlan({
-    wantMonths: baseMon,
-    baseMonthly,
-    assets: assetsEffective,
-    tax,
-    totalDebt: totalDebtUsed,
-    roundingUnit, minMonthly, maxMonthly: effectiveMax
-  });
+  const half = Math.max(1, Math.floor(months/2));
+  const mTaxMin = tax > 0 ? floor10k(tax / half) : 0;
 
-  const scenarioB = solvePlan({
-    wantMonths: Math.max(baseMon, 60),
-    baseMonthly,
-    assets: assetsEffective,
-    tax,
-    totalDebt: totalDebtUsed,
-    roundingUnit, minMonthly, maxMonthly: effectiveMax
-  });
+  let monthly = Math.max(monthlyBase, mTaxMin, MIN_BUSINESS);
+  monthly = clamp(round10k(monthly), MIN_BUSINESS, effMax);
 
-  // 더 낮은 월변제금을 기본 출력으로
-  let best = scenarioA.monthly <= scenarioB.monthly ? scenarioA : scenarioB;
-
-  // 7) 총채무보다 많이 내는 경우 → 기간 단축 (연장 금지)
-  best = maybeShortenMonths(best.monthly, best.months, totalDebtUsed, roundingUnit, tax);
-
-  // 8) 세금 1/2 규칙으로 인한 생계비 1/2 하락 경고
-  const requiredDisposable = best.monthly / (paymentRate || 1);
-  const impliedLiving = monthlyIncome - requiredDisposable;
-  const livingTooLow = impliedLiving < (livingAdjusted / 2);
-
-  const flags = [];
-  if (livingTooLow) {
-    flags.push("세금 우선변제로 월 변제금이 상승하여 생계비가 기준의 1/2 이하로 하락");
+  if (assetsTotal > 0) {
+    const needMonths = Math.ceil(assetsTotal / monthly);
+    months = Math.min(60, Math.max(months, needMonths));
+    if (monthly * months < assetsTotal) {
+      monthly = Math.max(MIN_BUSINESS, ceil10k(assetsTotal / months));
+    }
   }
+
+  if (monthly * months > unsecuredTotal) {
+    months = Math.max(1, Math.ceil(unsecuredTotal / monthly));
+  }
+
+  months  = Math.max(1, Math.min(60, months));
+  monthly = Math.max(MIN_BUSINESS, round10k(monthly));
+
+  const requiredDisposable = monthly / (paymentRate || 1);
+  const impliedLiving = monthlyIncome - requiredDisposable;
+  const flags = [];
+  if (tax > 0 && mTaxMin > 0) flags.push("세금 우선변제 반영으로 월 변제금이 상향될 수 있음");
+  if (impliedLiving < (livingAdjusted / 2)) flags.push("세금 우선변제로 생계비가 기준의 1/2 이하로 하락 가능");
 
   return {
+    consultOnly: false,
     rulesVersion: version,
-    monthlyRepayment: best.monthly,
-    months: best.months,
+    monthlyRepayment: monthly,
+    months,
     breakdown: {
       householdSize: size,
       monthlyIncome,
@@ -123,17 +114,15 @@ export function computeAssessment(input, rules){
       livingCostAdjusted: livingAdjusted,
       disposable,
       assets: assetCalc,
-      debts: { credit, tax, private: priv, secured, totalDebtUsed, totalDebtAll },
-      options: { basePlan: scenarioA, max60Plan: scenarioB },
+      debts: { credit, tax, private: priv, secured, unsecuredTotal, allDebtTotal },
       flags
     }
   };
 }
 
-// ---------- 자산 계산 ----------
-function computeAssets(input, rules){
+function computeAssets(input, { rentDepositPolicy, depositExempt, insuranceExempt }){
   const a = normalizeAssets(input?.assets);
-  const policy = rules?.rentDepositPolicy || {};
+  const policy = rentDepositPolicy || {};
   const cats = policy.categories || {};
   const overCities  = new Set(policy.overCities || []);
   const metroCities = new Set(policy.metroCities || []);
@@ -157,30 +146,27 @@ function computeAssets(input, rules){
       rentHomeAdj += (homeRent[i].deposit||0);
     }
   }
-  let rentWorkAdj = workRent.reduce((s,r)=> s + (r.deposit||0), 0);
+  const rentWorkAdj = workRent.reduce((s,r)=> s + (r.deposit||0), 0);
   const rentAdjTotal = rentHomeAdj + rentWorkAdj;
 
   const jeonseAdj = a.jeonse.reduce((s,j)=> s + Math.max(0, (j.deposit||0) - (j.loan||0)), 0);
   const ownAdj    = a.own.reduce((s,o)=> s + Math.max(0, (o.price||0) - (o.loan||0)), 0);
   const carAdj    = a.cars.reduce((s,c)=> s + Math.max(0, (c.price||0) - (c.loan||0)), 0);
 
-  const depositsAdj   = Math.max(0, (a.deposits||0)  - (rules.depositExempt||0));
-  const insuranceAdj  = Math.max(0, (a.insurance||0) - (rules.insuranceExempt||0));
+  const depositsAdj   = Math.max(0, (a.deposits||0)  - (depositExempt||0));
+  const insuranceAdj  = Math.max(0, (a.insurance||0) - (insuranceExempt||0));
   const securitiesAdj = Math.max(0, (a.securities||0));
 
   const total = rentAdjTotal + jeonseAdj + ownAdj + carAdj + depositsAdj + insuranceAdj + securitiesAdj;
 
   return {
     cityCategory: cat,
-    rent: { homeProcessed:firstDepositBrief(homeRent), rentHomeAdj, rentWorkAdj, rentAdjTotal },
+    rent: { rentHomeAdj, rentWorkAdj, rentAdjTotal },
     jeonseAdj, ownAdj, carAdj, depositsAdj, insuranceAdj, securitiesAdj,
     total
   };
 }
-function firstDepositBrief(list){
-  if (!list || !list.length) return null;
-  return { first: list[0], others: list.length-1 };
-}
+
 function pickCityCategory(city, overSet, metroSet){
   if (!city) return "other";
   if (city.includes('서울')) return "seoul";
@@ -189,40 +175,6 @@ function pickCityCategory(city, overSet, metroSet){
   return "other";
 }
 
-// ---------- 플랜 계산 ----------
-function solvePlan({ wantMonths, baseMonthly, assets, tax, totalDebt, roundingUnit, minMonthly, maxMonthly }){
-  let months = wantMonths;
-  const half = Math.max(1, Math.floor(months/2));
-
-  const mAssetMin = assets > 0 ? Math.ceil(assets / months / roundingUnit) * roundingUnit : 0;
-  const mTaxMin   = tax    > 0 ? Math.ceil(tax    / half   / roundingUnit) * roundingUnit : 0;
-  let monthly = Math.max(baseMonthly, mAssetMin, mTaxMin, minMonthly);
-  monthly = clamp(roundBy(monthly, roundingUnit), minMonthly, maxMonthly);
-
-  return { months, monthly, mAssetMin, mTaxMin };
-}
-
-function maybeShortenMonths(monthly, months, totalDebt, roundingUnit, tax){
-  if (monthly * months <= 0) return { monthly, months };
-
-  const currentTotal = monthly * months;
-  // ✅ 총채무보다 많이 내는 경우에만 단축 (연장은 금지)
-  if (currentTotal <= totalDebt) return { monthly, months };
-
-  let newMonths = Math.ceil(totalDebt / monthly);
-  newMonths = Math.max(1, Math.min(months, newMonths));
-
-  const half = Math.max(1, Math.floor(newMonths/2));
-  const mTaxMin = tax > 0 ? Math.ceil(tax / half / roundingUnit) * roundingUnit : 0;
-  const newMonthly = Math.max(monthly, mTaxMin);
-
-  return { monthly: newMonthly, months: newMonths, mTaxMin };
-}
-
-// ---------- 공통 유틸 ----------
-function disallow(msg){
-  return { rulesVersion: "rules-2025-01", monthlyRepayment: 0, months: 0, breakdown: { flags: [msg] } };
-}
 function getLivingCost(size, col){
   const table = col?.table || {};
   const per   = Number(col?.perExtra||0);
@@ -234,8 +186,7 @@ function getLivingCost(size, col){
   const extra  = Math.max(0, size - maxKey);
   return base + extra*per;
 }
-function clamp(x,min,max){ return Math.min(Math.max(x,min), max); }
-function roundBy(x,u){ return Math.round(x/u)*u; }
+
 function normalizeAssets(a={}){
   const rent   = Array.isArray(a.rent)?a.rent:[];
   const jeonse = Array.isArray(a.jeonse)?a.jeonse:[];

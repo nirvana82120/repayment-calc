@@ -1,39 +1,34 @@
 {
   "version": "rules-2025-01",
-
   "paymentRate": 1.0,
   "minMonthly": 200000,
-  "maxMonthly": null,                         // ← 상한 해제
+  "maxMonthly": null,
   "roundingUnit": 10000,
-
   "rentToAssetRate": 0.5,
-
   "carExempt": 0,
   "depositExempt": 1850000,
   "insuranceExempt": 1500000,
-
   "costOfLiving": {
     "table": {
       "1": 1430000,
       "2": 2350000,
       "3": 3010000,
-      "4": 3650000
+      "4": 3650000,
+      "5": 4260000
     },
     "perExtra": 640000
   },
-
   "basePeriodByAge": {
     "19-30": 24,
     "31-64": 36,
     "65plus": 24
   },
-
   "rentDepositPolicy": {
     "categories": {
       "seoul":   { "threshold": 165000000, "deduct": 55000000 },
       "over":    { "threshold": 145000000, "deduct": 48000000 },
-      "metro":   { "threshold":  85000000, "deduct": 28000000 },
-      "other":   { "threshold":  75000000, "deduct": 25000000 }
+      "metro":   { "threshold": 85000000,  "deduct": 28000000 },
+      "other":   { "threshold": 75000000,  "deduct": 25000000 }
     },
     "overCities": [
       "의정부시","구리시","남양주시","하남시","고양시","수원시","성남시","안양시","부천시","광명시","과천시","의왕시","군포시","시흥시","세종특별자치도","용인시","화성시","김포시"
@@ -44,4 +39,3 @@
     ]
   }
 }
-
