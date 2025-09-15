@@ -1,7 +1,7 @@
 // app-wire.js — 외부 엔진으로 계산/렌더 (커밋 해시 고정)
 
 // ===== 커밋 해시 고정(매우 중요) =====
-const COMMIT = 'ec18d88'; // ← 최신 커밋 7자리로 유지/갱신
+const COMMIT = 'ec18d8818e5d4f43139f2a3317ad3d605db7627d'; // ← 최신 커밋 7자리로 유지/갱신
 
 // 외부 엔진/룰 절대경로 (커밋 고정) + 캐시 무력화 쿼리
 const ENGINE_URL = `https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@${COMMIT}/engine.js?v=2025-09-14-07`;
@@ -10,7 +10,7 @@ const RULES_URL  = `https://cdn.jsdelivr.net/gh/nirvana82120/repayment-calc@${CO
 // (선택) 결과 수집용 웹훅
 const WEBHOOK_URL = '';
 
-// ---- 엔진 import(동적 import로 전환) ----
+// ---- 엔진 import(동적 import) ----
 const enginePromise = import(ENGINE_URL);
 
 // ---- 유틸 ----
@@ -96,9 +96,13 @@ function collectInput(){
   const divorce = collectDivorceAdjust();
 
   const homeRegion = $1('#regionGridHome .region-btn.active')?.dataset.region || '';
-  const homeCity   = $1('#regionDetailHome .city-btn.active')?.dataset.city || '';
+  let   homeCity   = $1('#regionDetailHome .city-btn.active')?.dataset.city || '';
   const workRegion = $1('#regionGridWork .region-btn.active')?.dataset.region || '';
-  const workCity   = $1('#regionDetailWork .city-btn.active')?.dataset.city || '';
+  let   workCity   = $1('#regionDetailWork .city-btn.active')?.dataset.city || '';
+
+  // ✅ 서울 선택인데 city가 비었으면 기본값 주입
+  if (!homeCity && homeRegion === 'seoul') homeCity = '서울특별시';
+  if (!workCity && workRegion === 'seoul') workCity = '서울특별시';
 
   return {
     meta: {
