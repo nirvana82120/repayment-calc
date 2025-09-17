@@ -271,4 +271,10 @@ async function calculateAndRender(){
 document.addEventListener('DOMContentLoaded', ()=>{
   window.__runAssessment = runAssessment; // 수동 테스트용
   const resultSection = document.querySelector('section.cm-step[data-step="10"]');
-  if (!resultSe
+  if (!resultSection) return;
+
+  if (!resultSection.hidden) calculateAndRender();
+
+  const mo = new MutationObserver(()=>{ if (!resultSection.hidden) calculateAndRender(); });
+  mo.observe(resultSection, { attributes:true, attributeFilter:['hidden'] });
+});
