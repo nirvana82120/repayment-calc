@@ -1,5 +1,8 @@
 // engine.js — 입력 + 룰 → 결과
 // 규칙: 최저월 300,000 / 나이대 기본기간 / 자산으로 기간 상향 / 과납 방지 / 세금 하한 제거
+// 변경: 이혼-직접부양(care='self')인 경우, '양육비 지급 금액'(alimonyPay)을
+//       생계비에서 빼지 않고, 가처분(disposable)에서 추가 차감한다.
+
 export function computeAssessment(input, rules) {
   const {
     paymentRate = 1.0,
@@ -41,18 +44,29 @@ export function computeAssessment(input, rules) {
   const livingBase = getLivingCost(size, costOfLiving);
 
   // 이혼 보정
-  const careType      = input?.divorce?.care || null;
-  const alimonyPay    = Number(input?.divorce?.alimonyPay||0);
-  const supportFromEx = Number(input?.divorce?.supportFromEx||0);
+  const careType      = input?.divorce?.care || null;     // 'self' | 'ex' | null
+  const alimonyPay    = Number(input?.divorce?.alimonyPay||0);      // 사용자가 '지급'하는 금액
+  const supportFromEx = Number(input?.divorce?.supportFromEx||0);   // 전배우자로부터 받는/지급? (현 로직 유지)
   const onePerson     = getLivingCost(1, costOfLiving);
 
+  // ✅ 변경 핵심
+  // - self(직접부양): 생계비는 가구원수 기준 그대로(livingBase), 양육비 지급액은 별도 지출로 가처분에서 차감
+  // - ex(전배우자 부양): 기존 로직 유지(1인 생계비 + supportFromEx)
   let livingAdjusted = livingBase;
+  let extraOutgo = 0; // 가처분에서 추가 차감할 금액
+
   if (input?.meta?.marital === 'divorced') {
-    if (careType === 'self') livingAdjusted = Math.max(0, livingBase - alimonyPay);
-    else if (careType === 'ex') livingAdjusted = onePerson + supportFromEx;
+    if (careType === 'self') {
+      livingAdjusted = livingBase;          // 생계비 그대로
+      extraOutgo = Math.max(0, alimonyPay); // 양육비 지급은 추가 지출
+    } else if (careType === 'ex') {
+      livingAdjusted = onePerson + supportFromEx; // 기존 설계 유지
+      extraOutgo = 0;
+    }
   }
 
-  const disposable = Math.max(0, monthlyIncome - livingAdjusted);
+  // 가처분
+  let disposable = Math.max(0, monthlyIncome - livingAdjusted - extraOutgo);
 
   // 1) 월 변제금
   let monthly = roundU(Math.max(disposable * paymentRate, minMonthly));
@@ -84,6 +98,7 @@ export function computeAssessment(input, rules) {
   let months = baseByAge;
   let flaggedAssetUp = false;
   let flaggedOverpayDown = false;
+  let flaggedAlimony = (input?.meta?.marital === 'divorced' && careType === 'self' && alimonyPay > 0);
 
   // 자산으로 상향
   if (assetsTotal > 0 && monthly * months < assetsTotal) {
@@ -104,8 +119,9 @@ export function computeAssessment(input, rules) {
   monthly = roundU(Math.max(minMonthly, monthly));
 
   const flags = [];
-  if (flaggedAssetUp)     flags.push("청산가치 충족을 위해 기간 상향");
-  if (flaggedOverpayDown) flags.push("무담보채무 초과 방지를 위해 기간 단축");
+  if (flaggedAlimony)      flags.push("양육비(지급) 차감 반영");
+  if (flaggedAssetUp)      flags.push("청산가치 충족을 위해 기간 상향");
+  if (flaggedOverpayDown)  flags.push("무담보채무 초과 방지를 위해 기간 단축");
   if (!flaggedAssetUp && !flaggedOverpayDown) flags.push("나이대 기본기간 적용");
 
   return {
@@ -118,6 +134,7 @@ export function computeAssessment(input, rules) {
       monthlyIncome,
       livingCostBase: livingBase,
       livingCostAdjusted: livingAdjusted,
+      alimonyOutgo: extraOutgo, // ✅ 참고값
       disposable,
       assets: assetCalc,
       debts: { credit, tax, private: priv, secured, unsecuredTotal, allDebtTotal },
@@ -173,6 +190,7 @@ function computeAssets(input, { rentDepositPolicy, depositExempt, insuranceExemp
     total
   };
 }
+
 function pickCityCategory(cityOrRegion, overSet, metroSet) {
   if (!cityOrRegion) return "other";
   const raw   = String(cityOrRegion).trim();
@@ -182,6 +200,7 @@ function pickCityCategory(cityOrRegion, overSet, metroSet) {
   if (metroSet.has(raw)) return "metro";
   return "other";
 }
+
 function getLivingCost(size, col){
   const table = col?.table || {};
   const per   = Number(col?.perExtra||0);
@@ -193,6 +212,7 @@ function getLivingCost(size, col){
   const extra  = Math.max(0, size - maxKey);
   return base + extra*per;
 }
+
 function normalizeAssets(a={}) {
   const rent   = Array.isArray(a.rent)?a.rent:[];
   const jeonse = Array.isArray(a.jeonse)?a.jeonse:[];
