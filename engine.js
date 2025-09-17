@@ -1,8 +1,9 @@
-// engine.js — 입력 + 룰 → 결과
-// 정책(요청 반영):
-// 1) 세금 우선변제 하한은 "항상 taxHalfBaseMonths(기본 30개월)" 기준으로 산정
-// 2) 기간은 preferMaxPeriod=true면 60개월을 우선 사용(자산충족·상한 검증 후 유지)
+// engine.js — 입력 + 룰 → 결과 (세금 우선변제 하한 로직 제거판)
+// 정책:
+// 1) 세금 관련 월 하한(기존 taxHalfBaseMonths/30개월) 로직 완전 제거
+// 2) 기간은 preferMaxPeriod=true면 60개월 우선(자산충족·상한 검증 후 유지)
 // 3) 자산(청산가치) < 무담보채무이면 정상 진행, 초과 시 상담 필요
+// 4) 무담보채무 = 신용대출 + 세금 + 개인채권자 (단순 합산)
 
 export function computeAssessment(input, rules) {
   const {
@@ -26,9 +27,6 @@ export function computeAssessment(input, rules) {
     basePeriodByAge = { "19-30":24, "31-64":36, "65plus":24 },
     preferMaxPeriod = true,      // ✅ 60개월 선호
     maxPeriod       = 60,
-
-    // 세금 우선변제 하한 계산 기준개월(항상 고정)
-    taxHalfBaseMonths = 30,      // ✅ 30개월 고정(= 60개월의 절반)
 
     version = "rules-2025-01"
   } = rules || {};
@@ -68,7 +66,7 @@ export function computeAssessment(input, rules) {
   const disposable = Math.max(0, monthlyIncome - livingAdjusted);
 
   // ===== 1) 기본 월 변제금(가처분 기준, 최저치 보장) =====
-  let monthly = roundU(Math.max(disposable, minMonthly));
+  let monthly = roundU(Math.max(disposable * paymentRate, minMonthly));
   monthly = clamp(monthly, minMonthly, effMax);
 
   // ===== 2) 재산(청산가치) 평가 =====
@@ -82,6 +80,7 @@ export function computeAssessment(input, rules) {
   const priv    = Number(debts.private||0);
   const secured = Number(debts.secured||0);
 
+  // 무담보채무 = 신용 + 세금 + 개인 (단순 합산)
   const unsecuredTotal = credit + tax + priv;
   const allDebtTotal   = unsecuredTotal + secured;
 
@@ -110,20 +109,9 @@ export function computeAssessment(input, rules) {
   // 기간은 1~60 범위
   months = Math.max(1, Math.min(maxPeriod, months));
 
-  // ===== 5) 세금 우선변제(월 하한) — 고정 30개월 기준 =====
-  const taxBaseMonths = Math.max(1, Number(taxHalfBaseMonths||30)); // ← 항상 30개월
-  const mTaxMin = tax > 0 ? floorU(tax / taxBaseMonths) : 0;
-  if (mTaxMin > monthly) {
-    monthly = clamp(roundU(mTaxMin), minMonthly, effMax);
-  }
+  // ===== 5) (세금 하한 로직 제거됨) =====
 
-  // 세금 하한 적용 후 자산충족 재점검(기간 우선)
-  if (assetsTotal > 0 && monthly * months < assetsTotal) {
-    const needByAssets2 = Math.ceil(assetsTotal / monthly);
-    months = Math.max(months, needByAssets2);
-  }
-
-  // ===== 6) 60개월로도 재산 미충족이면 월을 올림(이 케이스 드묾) =====
+  // ===== 6) 60개월로도 재산 미충족이면 월을 올림 =====
   if (assetsTotal > 0 && months >= maxPeriod && monthly * months < assetsTotal) {
     const needMonthly = ceilU(assetsTotal / months);
     monthly = clamp(needMonthly, minMonthly, effMax);
@@ -140,8 +128,7 @@ export function computeAssessment(input, rules) {
 
   // 플래그(참고 메시지)
   const flags = [];
-  if (tax > 0 && mTaxMin > 0) flags.push(`세금 우선변제 하한( ${taxBaseMonths}개월 기준 ) 반영`);
-  if (preferMaxPeriod)        flags.push("기간 60개월 선호 정책 적용");
+  if (preferMaxPeriod) flags.push("기간 60개월 선호 정책 적용");
 
   return {
     consultOnly: false,

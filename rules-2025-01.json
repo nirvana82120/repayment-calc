@@ -1,5 +1,5 @@
 {
-  "version": "rules-2025-01",
+  "version": "rules-2025-01a",
   "paymentRate": 1.0,
   "minMonthly": 200000,
   "maxMonthly": null,
@@ -36,6 +36,5 @@
     ]
   },
 
-  "preferMaxPeriod": true,
-  "taxHalfBaseMonths": 30
+  "preferMaxPeriod": true
 }
