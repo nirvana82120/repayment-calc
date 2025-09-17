@@ -1,7 +1,4 @@
-// app-wire.js — 외부 엔진/룰 자동 로드 + 변제율/경고문 고정 표시
-// ================================================================
-// 1) import.meta.url 기준으로 같은 세그먼트(@hash)의 engine.js / rules-2025-01.json 로드
-// 2) 결과 화면에 변제율 표시 + 고정 3줄 경고문 렌더
+// app-wire.js — 외부 엔진/룰 자동 로드 + 변제율/경고문 고정 표시 + consultOnly 전용 UI
 // ================================================================
 const SELF_URL = new URL(import.meta.url);
 const V = SELF_URL.searchParams.get('v') || '';
@@ -154,14 +151,13 @@ function ensureRateUI(){
     label.textContent = '변제율';
     const val = document.createElement('span');
     val.id = 'finalRate';
-    val.className = 'result-period'; // 녹색 스타일 재사용
+    val.className = 'result-period';
     const unit = document.createElement('span');
     unit.className = 'result-unit';
     unit.textContent = '%';
     row.appendChild(label); row.appendChild(val); row.appendChild(unit);
     main.appendChild(row);
 
-    // 공식 안내 문구
     const note = document.createElement('p');
     note.id = 'finalRateNote';
     note.className = 'small-note';
@@ -172,11 +168,10 @@ function ensureRateUI(){
 }
 
 function showFixedWarnings(){
-  const warnBox = $1('.result-warning ul') || (function(){
-    const wb = $1('.result-warning'); if(!wb) return null;
-    const u = document.createElement('ul'); wb.appendChild(u); return u;
-  })();
-  if(!warnBox) return;
+  const warnWrap = $1('.result-warning');
+  if(!warnWrap) return;
+  let warnBox = warnWrap.querySelector('ul');
+  if(!warnBox){ warnBox = document.createElement('ul'); warnWrap.appendChild(warnBox); }
   warnBox.innerHTML = '';
   const lines = [
     '주의: 본 결과는 입력 기준 추정치입니다. 증빙 확인 시 변제금·기간이 달라질 수 있습니다.',
@@ -186,38 +181,57 @@ function showFixedWarnings(){
   lines.forEach(t=>{ const li=document.createElement('li'); li.textContent=t; warnBox.appendChild(li); });
 }
 
+// ---------- consultOnly 전용 UI ----------
+function renderConsultOnly(out){
+  // 결과 숫자 UI 제거하고 전용 메시지만 노출
+  const main = $1('.result-main');
+  if (main) {
+    main.innerHTML = `
+      <div class="consult-only" style="display:flex;flex-direction:column;align-items:center;gap:10px;">
+        <div class="result-amount" style="color:#dc2626;">전문상담이 반드시 필요합니다</div>
+        <p class="small-note" style="text-align:center;color:#374151;margin:0;">
+          ${ (out?.breakdown?.flags && out.breakdown.flags[0]) ? '사유: ' + out.breakdown.flags[0] : '' }
+        </p>
+      </div>
+    `;
+  }
+
+  // 변제율/노트/경고 숨김
+  const {row, noteEl} = ensureRateUI();
+  if(row) row.style.display = 'none';
+  if(noteEl) noteEl.style.display = 'none';
+  const warn = $1('.result-warning');
+  if (warn) warn.style.display = 'none';
+
+  // 상단 숫자 필드도 비움
+  const rep = $1('#finalRepayment'); if(rep) rep.textContent = '';
+  const per = $1('#finalPeriod');    if(per) per.textContent = '';
+}
+
 // ---------- 렌더 ----------
 function renderOutput(out){
   const rep = $1('#finalRepayment');
   const per = $1('#finalPeriod');
 
-  // 항상 경고 고정 3줄 표시
-  showFixedWarnings();
-
-  // 상담 전용 케이스
+  // consultOnly: 전용 메시지로 교체(숫자/기간/변제율/경고 모두 숨김)
   if (out?.consultOnly) {
-    if (rep) rep.textContent = '전문상담 필요';
-    if (per) per.textContent = '';
-    // 변제율 숨김
-    const {row, noteEl} = ensureRateUI();
-    if(row) row.style.display = 'none';
-    if(noteEl) noteEl.style.display = 'none';
+    renderConsultOnly(out);
     console.log('[assessment][consultOnly]', out);
     return;
   }
 
-  // 금액/기간 표시
+  // 일반 케이스
+  showFixedWarnings();
+
   if (rep) rep.textContent = `${fmt(out.monthlyRepayment)}원`;
   if (per) per.textContent = `${out.months}개월`;
 
-  // 변제율 표시
   const { row, rateEl, noteEl } = ensureRateUI();
   try{
     const unsecured = Number(out?.breakdown?.debts?.unsecuredTotal || 0);
     if (unsecured > 0) {
       const totalPay = Number(out.monthlyRepayment||0) * Number(out.months||0);
       let rate = (totalPay / unsecured) * 100;
-      // 소수 1자리, 0.5% 미만 내림
       rate = Math.floor(rate * 10) / 10;
       if (rateEl) rateEl.textContent = rate.toLocaleString('ko-KR', { minimumFractionDigits:1, maximumFractionDigits:1 });
       if (row) row.style.display = 'flex';
@@ -257,10 +271,4 @@ async function calculateAndRender(){
 document.addEventListener('DOMContentLoaded', ()=>{
   window.__runAssessment = runAssessment; // 수동 테스트용
   const resultSection = document.querySelector('section.cm-step[data-step="10"]');
-  if (!resultSection) return;
-
-  if (!resultSection.hidden) calculateAndRender();
-
-  const mo = new MutationObserver(()=>{ if (!resultSection.hidden) calculateAndRender(); });
-  mo.observe(resultSection, { attributes:true, attributeFilter:['hidden'] });
-});
+  if (!resultSe
