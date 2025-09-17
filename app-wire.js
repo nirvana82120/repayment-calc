@@ -1,27 +1,17 @@
-// app-wire.js — 외부 엔진/룰을 같은 세그먼트(@prod/해시)에서 자동 로드 + ?v 동기 캐시버스팅
-// ================================================================
-// 1) 경로/캐시 세팅: import.meta.url 기준으로 engine.js / rules-2025-01.json 생성
-//    - Myweb에서 <script type="module" src="...@prod/app-wire.js?v=YYYY-MM-DD-NN"> 로 붙었으면
-//      이 파일은 동일 세그먼트(@prod)의 engine.js / rules-2025-01.json을 같은 ?v로 로드합니다.
-// ================================================================
+// app-wire.js — 외부 엔진/룰을 같은 세그먼트(@커밋해시)에서 자동 로드 + ?v 동기 캐시버스팅
 const SELF_URL = new URL(import.meta.url);
-const V = SELF_URL.searchParams.get('v') || ''; // 캐시 버스팅 파라미터(?v=…)
-
-/** 같은 ?v를 유지해 하위 리소스에도 캐시버스트 적용 */
+const V = SELF_URL.searchParams.get('v') || '';
 function withV(u) {
   const url = (u instanceof URL) ? new URL(u) : new URL(String(u));
   if (V) url.searchParams.set('v', V);
   return url.toString();
 }
-
-// 같은 세그먼트 하위의 sibling 파일 경로 생성
 const ENGINE_URL = withV(new URL('engine.js',          SELF_URL));
 const RULES_URL  = withV(new URL('rules-2025-01.json', SELF_URL));
 
 // (선택) 결과 수집 웹훅 – 필요 시 채워 사용
 const WEBHOOK_URL = '';
 
-// ---- 엔진 import(동적 import) ----
 const enginePromise = import(ENGINE_URL);
 
 // ---- 유틸 ----
@@ -42,6 +32,7 @@ function getDivorceKids(){
   const n = btn?.dataset.divorcekids;
   return n ? Number(n) : 0;
 }
+// 가구원수(기존 규칙): married = 1 + 미성년자녀수 / divorced(self)=1+자녀수 / 나머지=1
 function getHouseholdSize(){
   const marital = $1('#maritalGrid .region-btn.active')?.dataset.marital;
   if (marital === 'married') return 1 + (getKidsCountMarried()||0);
@@ -86,7 +77,6 @@ function collectAssets(){
     price: toNum($1('input[data-field="price"]', it)?.value),
     loan:  toNum($1('input[data-field="loan"]', it)?.value)
   }));
-
   return {
     rent, jeonse, own, cars,
     deposits:   toNum($1('#depositAmount')?.value),
@@ -115,7 +105,6 @@ function collectInput(){
   const workRegion = $1('#regionGridWork .region-btn.active')?.dataset.region || '';
   let   workCity   = $1('#regionDetailWork .city-btn.active')?.dataset.city || '';
 
-  // 서울 선택인데 city 비었으면 보정
   if (!homeCity && homeRegion === 'seoul') homeCity = '서울특별시';
   if (!workCity && workRegion === 'seoul') workCity = '서울특별시';
 
@@ -141,7 +130,6 @@ function renderOutput(out){
   const rep = $1('#finalRepayment');
   const per = $1('#finalPeriod');
   const warnBox = $1('.result-warning ul');
-
   if (warnBox) warnBox.innerHTML = '';
 
   if (out?.consultOnly) {
@@ -155,7 +143,6 @@ function renderOutput(out){
     console.log('[assessment][consultOnly]', out);
     return;
   }
-
   if (rep) rep.textContent = `${fmt(out.monthlyRepayment)}원`;
   if (per) per.textContent = `${out.months}개월`;
 
@@ -175,14 +162,12 @@ async function loadRules(){
   if(!res.ok) throw new Error('Failed to load rules');
   return res.json();
 }
-
 export async function runAssessment(overrideInput){
-  const { computeAssessment } = await enginePromise; // 동적 import
+  const { computeAssessment } = await enginePromise;
   const rules = await loadRules();
   const input = overrideInput || collectInput();
   return computeAssessment(input, rules);
 }
-
 async function calculateAndRender(){
   try{
     const rep = $1('#finalRepayment');
@@ -203,17 +188,11 @@ async function calculateAndRender(){
     }
   }catch(e){ console.error(e); }
 }
-
-// 결과 스텝(10) 열릴 때 계산
 document.addEventListener('DOMContentLoaded', ()=>{
-  window.__runAssessment = runAssessment; // 수동 테스트용
+  window.__runAssessment = runAssessment;
   const resultSection = document.querySelector('section.cm-step[data-step="10"]');
   if (!resultSection) return;
-
   if (!resultSection.hidden) calculateAndRender();
-
-  const mo = new MutationObserver(()=>{
-    if (!resultSection.hidden) calculateAndRender();
-  });
+  const mo = new MutationObserver(()=>{ if (!resultSection.hidden) calculateAndRender(); });
   mo.observe(resultSection, { attributes:true, attributeFilter:['hidden'] });
 });

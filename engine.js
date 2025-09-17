@@ -1,53 +1,42 @@
-// engine.js — 입력 + 룰 → 결과 (세금 우선변제 하한 로직 제거판)
-// 정책:
-// 1) 세금 관련 월 하한(기존 taxHalfBaseMonths/30개월) 로직 완전 제거
-// 2) 기간은 preferMaxPeriod=true면 60개월 우선(자산충족·상한 검증 후 유지)
-// 3) 자산(청산가치) < 무담보채무이면 정상 진행, 초과 시 상담 필요
-// 4) 무담보채무 = 신용대출 + 세금 + 개인채권자 (단순 합산)
-
+// engine.js — 입력 + 룰 → 결과
+// 규칙: 최저월 300,000 / 나이대 기본기간 / 자산으로 기간 상향 / 과납 방지 / 세금 하한 제거
 export function computeAssessment(input, rules) {
   const {
-    // ===== 규칙 파라미터 =====
     paymentRate = 1.0,
-    minMonthly  = 200000,
+    minMonthly  = 300000,   // ✅ 30만원
     maxMonthly  = null,
     roundingUnit= 10000,
 
     // 생계비
     costOfLiving = { table:{ "1":1430000, "2":2350000, "3":3010000, "4":3650000, "5":4260000 }, perExtra:640000 },
 
-    // 보증금/보험 공제
+    // 공제
     depositExempt   = 1850000,
     insuranceExempt = 1500000,
 
-    // 월세 보증금 지역 정책
+    // 월세 보증금 지역정책
     rentDepositPolicy = {},
 
-    // 기간 관련
+    // 기간
     basePeriodByAge = { "19-30":24, "31-64":36, "65plus":24 },
-    preferMaxPeriod = true,      // ✅ 60개월 선호
     maxPeriod       = 60,
 
-    version = "rules-2025-01"
+    version = "rules-2025-01b"
   } = rules || {};
 
-  // ===== helpers =====
   const roundU = (x)=> Math.round(x/roundingUnit)*roundingUnit;
-  const floorU = (x)=> Math.floor(x/roundingUnit)*roundingUnit;
   const ceilU  = (x)=> Math.ceil(x/roundingUnit)*roundingUnit;
   const clamp  = (x,min,max)=> Math.min(Math.max(x,min), max);
   const effMax = Number.isFinite(maxMonthly) && maxMonthly != null ? maxMonthly : Infinity;
 
-  const consult = (msg)=> ({
-    consultOnly: true, rulesVersion: version, monthlyRepayment: 0, months: 0, breakdown:{ flags:[msg] }
-  });
+  const consult = (msg)=> ({ consultOnly:true, rulesVersion:version, monthlyRepayment:0, months:0, breakdown:{ flags:[msg] } });
 
-  // ===== 0) 입력/기본 검증 =====
+  // 0) 입력 검증
   const monthlyIncome = Math.max(0, Number(input?.monthlyIncome||0));
   if (input?.meta?.dischargeWithin5y) return consult("최근 5년 내 면책결정 이력으로 전문상담 필요");
   if (monthlyIncome <= 1_000_000)     return consult("소득 합계가 100만원 이하로 전문상담 필요");
 
-  // 가구원 및 생계비
+  // 생계비
   const size   = Math.max(1, Number(input?.householdSize||1));
   const livingBase = getLivingCost(size, costOfLiving);
 
@@ -65,70 +54,59 @@ export function computeAssessment(input, rules) {
 
   const disposable = Math.max(0, monthlyIncome - livingAdjusted);
 
-  // ===== 1) 기본 월 변제금(가처분 기준, 최저치 보장) =====
+  // 1) 월 변제금
   let monthly = roundU(Math.max(disposable * paymentRate, minMonthly));
   monthly = clamp(monthly, minMonthly, effMax);
 
-  // ===== 2) 재산(청산가치) 평가 =====
+  // 2) 재산(청산가치)
   const assetCalc   = computeAssets(input, { rentDepositPolicy, depositExempt, insuranceExempt });
   const assetsTotal = assetCalc.total;
 
-  // ===== 3) 채무 구성 =====
+  // 3) 채무
   const debts = input?.debts?.byType || {};
   const credit  = Number(debts.credit||0);
   const tax     = Number(debts.tax||0);
   const priv    = Number(debts.private||0);
   const secured = Number(debts.secured||0);
-
-  // 무담보채무 = 신용 + 세금 + 개인 (단순 합산)
   const unsecuredTotal = credit + tax + priv;
   const allDebtTotal   = unsecuredTotal + secured;
 
-  // 상한 체크(10억/15억)
   if (unsecuredTotal > 1_000_000_000) return consult("무담보채무가 10억원을 초과하여 전문상담 필요");
   if (secured        > 1_500_000_000) return consult("담보채무가 15억원을 초과하여 전문상담 필요");
-
-  // 재산이 무담보총액을 초과하면 개인회생 곤란
   if (assetsTotal > unsecuredTotal && assetsTotal > 0) {
     return consult("총재산이 무담보채무를 초과하여 개인회생 곤란(전문상담 필요)");
   }
 
-  // ===== 4) 기간 산정 — 60개월 선호 + 자산충족 우선 =====
+  // 4) 기간 — 나이대 기본 → 자산 상향 → 과납 단축
   const ageKey = input?.meta?.ageBand || '';
   const baseByAge = ({ "19-30":24, "31-64":36, "65plus":24, ...basePeriodByAge })[ageKey] ?? 36;
 
-  // 4-1) 시작기간: 60개월 선호면 60, 아니면 나이대 기준
-  let months = preferMaxPeriod ? maxPeriod : baseByAge;
+  let months = baseByAge;
+  let flaggedAssetUp = false;
+  let flaggedOverpayDown = false;
 
-  // 4-2) 자산충족: 현재 월 변제금으로 자산 충족에 필요한 개월수 계산
-  if (assetsTotal > 0) {
-    const needByAssets = Math.ceil(assetsTotal / monthly);
-    months = Math.max(months, needByAssets);
+  // 자산으로 상향
+  if (assetsTotal > 0 && monthly * months < assetsTotal) {
+    months = Math.ceil(assetsTotal / monthly);
+    flaggedAssetUp = true;
   }
 
-  // 기간은 1~60 범위
-  months = Math.max(1, Math.min(maxPeriod, months));
-
-  // ===== 5) (세금 하한 로직 제거됨) =====
-
-  // ===== 6) 60개월로도 재산 미충족이면 월을 올림 =====
-  if (assetsTotal > 0 && months >= maxPeriod && monthly * months < assetsTotal) {
-    const needMonthly = ceilU(assetsTotal / months);
-    monthly = clamp(needMonthly, minMonthly, effMax);
-  }
-
-  // ===== 7) 과납 방지 — 무담보채무 초과 시 개월수 조정(줄임) =====
+  // 과납 방지(무담보보다 많이 내지 않도록 단축)
   if (unsecuredTotal > 0 && monthly * months > unsecuredTotal) {
-    months = Math.max(1, Math.ceil(unsecuredTotal / monthly));
+    const need = Math.ceil(unsecuredTotal / monthly);
+    if (need < months) {
+      months = need;
+      flaggedOverpayDown = true;
+    }
   }
 
-  // 최종 보정
-  months  = Math.max(1, Math.min(maxPeriod, months));
+  months = Math.max(1, Math.min(maxPeriod, months));
   monthly = roundU(Math.max(minMonthly, monthly));
 
-  // 플래그(참고 메시지)
   const flags = [];
-  if (preferMaxPeriod) flags.push("기간 60개월 선호 정책 적용");
+  if (flaggedAssetUp)     flags.push("청산가치 충족을 위해 기간 상향");
+  if (flaggedOverpayDown) flags.push("무담보채무 초과 방지를 위해 기간 단축");
+  if (!flaggedAssetUp && !flaggedOverpayDown) flags.push("나이대 기본기간 적용");
 
   return {
     consultOnly: false,
@@ -195,7 +173,6 @@ function computeAssets(input, { rentDepositPolicy, depositExempt, insuranceExemp
     total
   };
 }
-
 function pickCityCategory(cityOrRegion, overSet, metroSet) {
   if (!cityOrRegion) return "other";
   const raw   = String(cityOrRegion).trim();
@@ -205,7 +182,6 @@ function pickCityCategory(cityOrRegion, overSet, metroSet) {
   if (metroSet.has(raw)) return "metro";
   return "other";
 }
-
 function getLivingCost(size, col){
   const table = col?.table || {};
   const per   = Number(col?.perExtra||0);
@@ -217,7 +193,6 @@ function getLivingCost(size, col){
   const extra  = Math.max(0, size - maxKey);
   return base + extra*per;
 }
-
 function normalizeAssets(a={}) {
   const rent   = Array.isArray(a.rent)?a.rent:[];
   const jeonse = Array.isArray(a.jeonse)?a.jeonse:[];

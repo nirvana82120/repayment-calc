@@ -1,7 +1,7 @@
 {
-  "version": "rules-2025-01a",
+  "version": "rules-2025-01b",
   "paymentRate": 1.0,
-  "minMonthly": 200000,
+  "minMonthly": 300000,
   "maxMonthly": null,
   "roundingUnit": 10000,
 
@@ -34,7 +34,5 @@
       "부산광역시","대구광역시","인천광역시","광주광역시","대전광역시","울산광역시",
       "안산시","광주시","파주시","이천시","평택시"
     ]
-  },
-
-  "preferMaxPeriod": true
+  }
 }
