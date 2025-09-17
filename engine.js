@@ -1,12 +1,17 @@
 // engine.js — 입력 + 룰 → 결과
-// 규칙: 최저월 300,000 / 나이대 기본기간 / 자산으로 기간 상향 / 과납 방지 / 세금 하한 제거
-// 변경: 이혼-직접부양(care='self')인 경우, '양육비 지급 금액'(alimonyPay)을
-//       생계비에서 빼지 않고, 가처분(disposable)에서 추가 차감한다.
+// 정책 요약:
+// - 기간: 나이대 기본개월(19–30세 24 / 31–64세 36 / 65+ 24). 60개월 선호 없음.
+// - 월 변제금: max(가처분, 300,000) → 만원단위 반올림.
+// - 자산(청산가치) 보정: 월×기간 < 청산가치면 기간 = ceil(청산가치 ÷ 월).
+// - 과납 방지: 월×기간 > 무담보총합이면 기간 = ceil(무담보 ÷ 월).
+// - 이혼(직접부양): 양육비 지급액(alimonyPay)만큼 가처분에서 차감.
+// - 이혼(전배우자 부양): 1인가구 생계비 + 전배우자 지원금으로 생계비 보정.
+// - 무담보>10억, 담보>15억, 총재산>무담보 → 상담 필요.
 
 export function computeAssessment(input, rules) {
   const {
     paymentRate = 1.0,
-    minMonthly  = 300000,   // ✅ 30만원
+    minMonthly  = 300000,     // ✅ 최저 30만원
     maxMonthly  = null,
     roundingUnit= 10000,
 
@@ -17,59 +22,57 @@ export function computeAssessment(input, rules) {
     depositExempt   = 1850000,
     insuranceExempt = 1500000,
 
-    // 월세 보증금 지역정책
+    // 월세 보증금 지역 정책
     rentDepositPolicy = {},
 
-    // 기간
+    // 기간 관련
     basePeriodByAge = { "19-30":24, "31-64":36, "65plus":24 },
     maxPeriod       = 60,
 
-    version = "rules-2025-01b"
+    version = "rules-2025-01"
   } = rules || {};
 
+  // helpers
   const roundU = (x)=> Math.round(x/roundingUnit)*roundingUnit;
+  const floorU = (x)=> Math.floor(x/roundingUnit)*roundingUnit;
   const ceilU  = (x)=> Math.ceil(x/roundingUnit)*roundingUnit;
   const clamp  = (x,min,max)=> Math.min(Math.max(x,min), max);
   const effMax = Number.isFinite(maxMonthly) && maxMonthly != null ? maxMonthly : Infinity;
 
   const consult = (msg)=> ({ consultOnly:true, rulesVersion:version, monthlyRepayment:0, months:0, breakdown:{ flags:[msg] } });
 
-  // 0) 입력 검증
+  // 0) 입력/기본 검증
   const monthlyIncome = Math.max(0, Number(input?.monthlyIncome||0));
   if (input?.meta?.dischargeWithin5y) return consult("최근 5년 내 면책결정 이력으로 전문상담 필요");
   if (monthlyIncome <= 1_000_000)     return consult("소득 합계가 100만원 이하로 전문상담 필요");
 
-  // 생계비
+  // 가구원/생계비
   const size   = Math.max(1, Number(input?.householdSize||1));
   const livingBase = getLivingCost(size, costOfLiving);
 
   // 이혼 보정
-  const careType      = input?.divorce?.care || null;     // 'self' | 'ex' | null
-  const alimonyPay    = Number(input?.divorce?.alimonyPay||0);      // 사용자가 '지급'하는 금액
-  const supportFromEx = Number(input?.divorce?.supportFromEx||0);   // 전배우자로부터 받는/지급? (현 로직 유지)
+  const careType      = input?.divorce?.care || null;
+  const alimonyPay    = Number(input?.divorce?.alimonyPay||0);
+  const supportFromEx = Number(input?.divorce?.supportFromEx||0);
   const onePerson     = getLivingCost(1, costOfLiving);
 
-  // ✅ 변경 핵심
-  // - self(직접부양): 생계비는 가구원수 기준 그대로(livingBase), 양육비 지급액은 별도 지출로 가처분에서 차감
-  // - ex(전배우자 부양): 기존 로직 유지(1인 생계비 + supportFromEx)
   let livingAdjusted = livingBase;
-  let extraOutgo = 0; // 가처분에서 추가 차감할 금액
+  const flags = [];
 
   if (input?.meta?.marital === 'divorced') {
     if (careType === 'self') {
-      livingAdjusted = livingBase;          // 생계비 그대로
-      extraOutgo = Math.max(0, alimonyPay); // 양육비 지급은 추가 지출
+      livingAdjusted = Math.max(0, livingBase - alimonyPay);
+      if (alimonyPay > 0) flags.push("양육비(지급) 차감 반영");
     } else if (careType === 'ex') {
-      livingAdjusted = onePerson + supportFromEx; // 기존 설계 유지
-      extraOutgo = 0;
+      livingAdjusted = onePerson + supportFromEx;
+      if (supportFromEx > 0) flags.push("전배우자 지원 반영");
     }
   }
 
-  // 가처분
-  let disposable = Math.max(0, monthlyIncome - livingAdjusted - extraOutgo);
+  const disposable = Math.max(0, monthlyIncome - livingAdjusted);
 
   // 1) 월 변제금
-  let monthly = roundU(Math.max(disposable * paymentRate, minMonthly));
+  let monthly = roundU(Math.max(disposable, minMonthly));
   monthly = clamp(monthly, minMonthly, effMax);
 
   // 2) 재산(청산가치)
@@ -82,47 +85,38 @@ export function computeAssessment(input, rules) {
   const tax     = Number(debts.tax||0);
   const priv    = Number(debts.private||0);
   const secured = Number(debts.secured||0);
-  const unsecuredTotal = credit + tax + priv;
+
+  const unsecuredTotal = credit + tax + priv; // ✅ 무담보 합계
   const allDebtTotal   = unsecuredTotal + secured;
 
   if (unsecuredTotal > 1_000_000_000) return consult("무담보채무가 10억원을 초과하여 전문상담 필요");
   if (secured        > 1_500_000_000) return consult("담보채무가 15억원을 초과하여 전문상담 필요");
+
   if (assetsTotal > unsecuredTotal && assetsTotal > 0) {
     return consult("총재산이 무담보채무를 초과하여 개인회생 곤란(전문상담 필요)");
   }
 
-  // 4) 기간 — 나이대 기본 → 자산 상향 → 과납 단축
+  // 4) 기간 산정 — 나이대 기본개월
   const ageKey = input?.meta?.ageBand || '';
   const baseByAge = ({ "19-30":24, "31-64":36, "65plus":24, ...basePeriodByAge })[ageKey] ?? 36;
-
   let months = baseByAge;
-  let flaggedAssetUp = false;
-  let flaggedOverpayDown = false;
-  let flaggedAlimony = (input?.meta?.marital === 'divorced' && careType === 'self' && alimonyPay > 0);
+  flags.push("나이대 기본기간 적용");
 
-  // 자산으로 상향
+  // 자산충족 보정
   if (assetsTotal > 0 && monthly * months < assetsTotal) {
     months = Math.ceil(assetsTotal / monthly);
-    flaggedAssetUp = true;
+    flags.push("청산가치 충족 위해 기간 상향");
   }
 
-  // 과납 방지(무담보보다 많이 내지 않도록 단축)
+  // 과납 방지(무담보 초과 납부 방지)
   if (unsecuredTotal > 0 && monthly * months > unsecuredTotal) {
-    const need = Math.ceil(unsecuredTotal / monthly);
-    if (need < months) {
-      months = need;
-      flaggedOverpayDown = true;
-    }
+    months = Math.max(1, Math.ceil(unsecuredTotal / monthly));
+    flags.push("과납 방지로 기간 단축");
   }
 
-  months = Math.max(1, Math.min(maxPeriod, months));
+  // 최종 보정
+  months  = Math.max(1, Math.min(maxPeriod, months));
   monthly = roundU(Math.max(minMonthly, monthly));
-
-  const flags = [];
-  if (flaggedAlimony)      flags.push("양육비(지급) 차감 반영");
-  if (flaggedAssetUp)      flags.push("청산가치 충족을 위해 기간 상향");
-  if (flaggedOverpayDown)  flags.push("무담보채무 초과 방지를 위해 기간 단축");
-  if (!flaggedAssetUp && !flaggedOverpayDown) flags.push("나이대 기본기간 적용");
 
   return {
     consultOnly: false,
@@ -134,7 +128,6 @@ export function computeAssessment(input, rules) {
       monthlyIncome,
       livingCostBase: livingBase,
       livingCostAdjusted: livingAdjusted,
-      alimonyOutgo: extraOutgo, // ✅ 참고값
       disposable,
       assets: assetCalc,
       debts: { credit, tax, private: priv, secured, unsecuredTotal, allDebtTotal },
