@@ -1,5 +1,5 @@
-// app-wire.js — 외부 엔진/룰 자동 로드 + 변제율/경고문 고정 표시 + consultOnly 전용 UI
-// ================================================================
+// app-wire.js — 외부 엔진/룰 자동 로드 + 변제율/경고문 고정 표시 + consultOnly 전용 UI + Google Sheet Webhook
+// ===============================================================================================================
 const SELF_URL = new URL(import.meta.url);
 const V = SELF_URL.searchParams.get('v') || '';
 
@@ -9,13 +9,14 @@ function withV(u) {
   return url.toString();
 }
 
-const ENGINE_URL = withV(new URL('engine.js',           SELF_URL));
-const RULES_URL  = withV(new URL('rules-2025-01.json',  SELF_URL));
+const ENGINE_URL = withV(new URL('engine.js',          SELF_URL));
+const RULES_URL  = withV(new URL('rules-2025-01.json', SELF_URL));
 
-// (선택) 결과 수집 웹훅 – 필요 시 채워 사용
-const WEBHOOK_URL = https://script.google.com/macros/s/AKfycbxTBskgI5IjC3mVPI3WxVoWQInq8WptdXyjh-niDvT2kAyl7MjT7svCaarlTVggGiY2/exec
+/** ▼▼ 반드시 본인 Apps Script 웹앱 URL(/exec)로 바꾸세요 ▼▼ */
+const WEBHOOK_URL = 'https://script.google.com/macros/s/PUT_YOUR_WEBAPP_ID/exec';
+/** ▲▲ */
 
-// ---- 엔진 import(동적 import) ----
+// ---- 엔진 import ----
 const enginePromise = import(ENGINE_URL);
 
 // ---- 유틸 ----
@@ -138,6 +139,34 @@ export async function runAssessment(overrideInput){
   return computeAssessment(input, rules);
 }
 
+// ---------- Webhook 전송 ----------
+function sendWebhook({ event, result, contact }) {
+  if (!WEBHOOK_URL) return;
+
+  const payload = collectInput();
+  const body = {
+    event,
+    page: location.href,
+    referrer: document.referrer || '',
+    ua: navigator.userAgent || '',
+    input: payload,         // Apps Script가 받기 쉽게 input 키도 전달
+    payload,                // (백업 키)
+    result,
+    contact: contact || null,
+    at: Date.now()
+  };
+
+  try{
+    // CORS 프리플라이트 방지: headers 제거 + mode:'no-cors'
+    fetch(WEBHOOK_URL, {
+      method: 'POST',
+      mode: 'no-cors',
+      keepalive: true,
+      body: JSON.stringify(body)
+    }).catch(()=>{});
+  }catch(_){}
+}
+
 // ---------- UI Helpers (변제율/경고 고정) ----------
 function ensureRateUI(){
   const main = $1('.result-main');
@@ -183,44 +212,40 @@ function showFixedWarnings(){
 
 // ---------- consultOnly 전용 UI ----------
 function renderConsultOnly(out){
-  // 결과 숫자 UI 제거하고 전용 메시지만 노출
   const main = $1('.result-main');
   if (main) {
     main.innerHTML = `
       <div class="consult-only" style="display:flex;flex-direction:column;align-items:center;gap:10px;">
         <div class="result-amount" style="color:#dc2626;">전문상담이 반드시 필요합니다</div>
         <p class="small-note" style="text-align:center;color:#374151;margin:0;">
-          ${ (out?.breakdown?.flags && out.breakdown.flags[0]) ? '사유: ' + out.breakdown.flags[0] : '' }
+          ${(out?.breakdown?.flags && out.breakdown.flags[0]) ? '사유: ' + out.breakdown.flags[0] : ''}
         </p>
       </div>
     `;
   }
-
-  // 변제율/노트/경고 숨김
   const {row, noteEl} = ensureRateUI();
   if(row) row.style.display = 'none';
   if(noteEl) noteEl.style.display = 'none';
   const warn = $1('.result-warning');
   if (warn) warn.style.display = 'none';
-
-  // 상단 숫자 필드도 비움
   const rep = $1('#finalRepayment'); if(rep) rep.textContent = '';
   const per = $1('#finalPeriod');    if(per) per.textContent = '';
 }
 
 // ---------- 렌더 ----------
+let __lastResult = null;
+
 function renderOutput(out){
+  __lastResult = out;
   const rep = $1('#finalRepayment');
   const per = $1('#finalPeriod');
 
-  // consultOnly: 전용 메시지로 교체(숫자/기간/변제율/경고 모두 숨김)
   if (out?.consultOnly) {
     renderConsultOnly(out);
     console.log('[assessment][consultOnly]', out);
     return;
   }
 
-  // 일반 케이스
   showFixedWarnings();
 
   if (rep) rep.textContent = `${fmt(out.monthlyRepayment)}원`;
@@ -256,18 +281,12 @@ async function calculateAndRender(){
     const out = await runAssessment();
     renderOutput(out);
 
-    if (WEBHOOK_URL){
-      const payload = collectInput();
-      fetch(WEBHOOK_URL, {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ payload, result: out, at: Date.now() })
-      }).catch(()=>{});
-    }
+    // 결과 스텝이 열릴 때: 무료진단 이벤트 전송
+    sendWebhook({ event: 'assessment_done', result: out });
+
   }catch(e){ console.error(e); }
 }
 
-// 결과 스텝(10) 열릴 때 계산
 document.addEventListener('DOMContentLoaded', ()=>{
   window.__runAssessment = runAssessment; // 수동 테스트용
   const resultSection = document.querySelector('section.cm-step[data-step="10"]');
@@ -277,4 +296,22 @@ document.addEventListener('DOMContentLoaded', ()=>{
 
   const mo = new MutationObserver(()=>{ if (!resultSection.hidden) calculateAndRender(); });
   mo.observe(resultSection, { attributes:true, attributeFilter:['hidden'] });
+
+  // 상담신청 submit 훅: 개인정보 포함 전송
+  const submitBtn = document.getElementById('submitConsult');
+  submitBtn?.addEventListener('click', async ()=>{
+    // canProceed는 원래 페이지 로직에서 관리됨(버튼 disabled 해제 시점이 곧 유효)
+    const contact = {
+      name:  ($1('#clientName')?.value || '').trim(),
+      phone: ($1('#clientPhone')?.value || '').trim(),
+      preferredDate: $1('#preferredDate')?.value || '',
+      preferredTime: $1('#preferredTime')?.value || ''
+    };
+    // 결과가 없다면 한번 계산
+    const result = __lastResult || await runAssessment();
+    sendWebhook({ event: 'consult_submitted', result, contact });
+
+    alert('상담 신청이 완료되었습니다. 곧 연락드리겠습니다.');
+    // 모달 닫는 기존 로직은 원본 코드대로
+  });
 });
