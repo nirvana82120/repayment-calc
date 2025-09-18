@@ -13,7 +13,7 @@ const ENGINE_URL = withV(new URL('engine.js',           SELF_URL));
 const RULES_URL  = withV(new URL('rules-2025-01.json',  SELF_URL));
 
 // (선택) 결과 수집 웹훅 – 필요 시 채워 사용
-const WEBHOOK_URL = '';
+const WEBHOOK_URL = https://script.google.com/macros/s/AKfycbxTBskgI5IjC3mVPI3WxVoWQInq8WptdXyjh-niDvT2kAyl7MjT7svCaarlTVggGiY2/exec
 
 // ---- 엔진 import(동적 import) ----
 const enginePromise = import(ENGINE_URL);
