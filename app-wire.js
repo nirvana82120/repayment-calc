@@ -13,7 +13,7 @@ const ENGINE_URL = withV(new URL('engine.js',          SELF_URL));
 const RULES_URL  = withV(new URL('rules-2025-01.json', SELF_URL));
 
 /** ▼▼ 새로 배포한 Apps Script 웹앱 URL(/exec)로 교체하세요 ▼▼ */
-const WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbzSgz9PhKr7axqi-a2LrSZBbRbsbpzEqG0XeidttG5EKkGryaxVkENVgbi70vC9g5zYQg/exec';
+const WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbz2D6jJ2HDFrzzL3MLVQe1dhDxpyU8hQTjl3EQE54MSlKqfgzp-aul4Ovh4duWXZU9A/exec';
 /** ▲▲ */
 
 // ---- 엔진 import ----
