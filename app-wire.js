@@ -1,5 +1,5 @@
-// app-wire.js — 엔진/룰 자동 로드 + 상세 입력 수집 확장 + 변제율/경고 고정
-// =================================================================================
+// app-wire.js — 엔진/룰 자동 로드 + 상세 payload + 변제율/경고 고정 + consultOnly UI + Google Sheet Webhook + 중복전송 방지
+// ===============================================================================================================
 const SELF_URL = new URL(import.meta.url);
 const V = SELF_URL.searchParams.get('v') || '';
 
@@ -12,8 +12,8 @@ function withV(u) {
 const ENGINE_URL = withV(new URL('engine.js',          SELF_URL));
 const RULES_URL  = withV(new URL('rules-2025-01.json', SELF_URL));
 
-/** ▼▼ 이미 발급받은 Apps Script 웹앱 /exec URL 유지 ▼▼ */
-const WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbzSgz9PhKr7axqi-a2LrSZBbRbsbpzEqG0XeidttG5EKkGryaxVkENVgbi70vC9g5zYQg/exec';
+/** ▼▼ 새로 배포한 Apps Script 웹앱 URL(/exec)로 교체하세요 ▼▼ */
+const WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbz2D6jJ2HDFrzzL3MLVQe1dhDxpyU8hQTjl3EQE54MSlKqfgzp-aul4Ovh4duWXZU9A/exec';
 /** ▲▲ */
 
 // ---- 엔진 import ----
@@ -25,7 +25,7 @@ const $all = (sel, root=document)=> Array.from(root.querySelectorAll(sel));
 const toNum= (v)=> Number(String(v||'').replace(/[^\d]/g,''))||0;
 const fmt  = (n)=> (Number(n)||0).toLocaleString('ko-KR');
 
-// ---------- Step6 파생(원본 + 확장) ----------
+// ---------- Step6 파생(기존 UI 값 읽기) ----------
 function getKidsCountMarried(){
   const active = $1('#kidsChips .chip.active')?.dataset.kids;
   if (active === 'other') return toNum($1('#kidsOtherNum')?.value);
@@ -33,12 +33,6 @@ function getKidsCountMarried(){
 }
 function getDivorceCareType(){ return $1('#divorceCareChips .chip.active')?.dataset.care || null; }
 function getDivorceKids(){ const btn = $1('#divorceKidsChips .chip.active'); const n = btn?.dataset.divorcekids; return n ? Number(n) : 0; }
-function getSpouseJob(){
-  const btn = $1('#spouseChips .chip.active');
-  const key = btn?.dataset.spouse || '';
-  if (!key) return '';
-  return ({ none:'무직', employee:'직장인', biz:'자영업자' })[key] || key;
-}
 function getHouseholdSize(){
   const marital = $1('#maritalGrid .region-btn.active')?.dataset.marital;
   if (marital === 'married') return 1 + (getKidsCountMarried()||0);
@@ -49,114 +43,120 @@ function getHouseholdSize(){
   }
   return 1;
 }
-
-// ---------- 상세 수집(확장) ----------
-// 소득: 선택 탭 상태 + 금액
-function collectIncomeDetailed(){
-  const emp = toNum($1('#empIncome')?.value);
-  const biz = toNum($1('#bizIncome')?.value);
-
-  const pensionTabOn = !!$1('.income-tab[data-tab="pension"].active');
-  const pensionYes   = !!$1('#cardPension .chip[data-pension="yes"].active');
-  const pen = (pensionTabOn && pensionYes) ? toNum($1('#pensionIncome')?.value) : 0;
-
-  const selected = {
-    emp: !!$1('.income-tab[data-tab="emp"].active'),
-    biz: !!$1('.income-tab[data-tab="biz"].active'),
-    pension: pensionTabOn,
-    pensionYes
-  };
-
-  return { emp, biz, pen, total:(emp+biz+pen), selected };
+function labelAge(a){
+  if (a==='19-30') return '만19~30세';
+  if (a==='31-64') return '만31~64세';
+  if (a==='65plus') return '만65세+';
+  return '-';
+}
+function labelMarital(m){
+  if (m==='single') return '미혼';
+  if (m==='married') return '결혼';
+  if (m==='divorced') return '이혼';
+  if (m==='widowed') return '사별';
+  return '-';
+}
+function labelSpouse(x){
+  if (x==='none') return '무직';
+  if (x==='employee') return '직장인';
+  if (x==='biz') return '자영업자';
+  return '';
 }
 
-// 가족/결혼 상세
-function collectFamily(){
-  const marital = $1('#maritalGrid .region-btn.active')?.dataset.marital || ''; // married/divorced/single/widowed
-  const care = getDivorceCareType(); // self/ex/null
+// ---------- 수집 ----------
+function collectIncome(){
+  // 카드 표시 여부 기반(선택된 탭)
+  const showEmp = $1('#cardEmp')?.classList.contains('show');
+  const showBiz = $1('#cardBiz')?.classList.contains('show');
+  const penShown = $1('#cardPension')?.classList.contains('show');
+  const penYes = $1('#pensionAmountRow')?.style.display !== 'none';
 
-  return {
-    marital,
-    // 결혼 선택 시 상세
-    kidsMarried: (marital==='married') ? (getKidsCountMarried()||0) : 0,
-    spouseJob:   (marital==='married') ? getSpouseJob() : '',
-    // 이혼 선택 시 상세
-    divorceCare: (marital==='divorced') ? (care||'') : '',
-    divorceKids: (marital==='divorced' && care==='self') ? (getDivorceKids()||0) : 0,
-    alimonyPay:  (marital==='divorced' && care==='self') ? toNum($1('#alimonyPay')?.value) : 0,
-    supportFromEx:(marital==='divorced' && care==='ex') ? toNum($1('#supportFromEx')?.value) : 0
-  };
+  const emp = showEmp ? toNum($1('#empIncome')?.value) : 0;
+  const biz = showBiz ? toNum($1('#bizIncome')?.value) : 0;
+  const pen = (penShown && penYes) ? toNum($1('#pensionIncome')?.value) : 0;
+
+  const detail = [];
+  if (showEmp) detail.push({ type:'emp', label:'직장인', amount:emp });
+  if (showBiz) detail.push({ type:'biz', label:'자영업자 및 영업소득자', amount:biz });
+  if (penShown) detail.push({ type:'pension', label:'연금소득', amount:pen, hasPension: penYes });
+
+  return { emp, biz, pen, total: emp + biz + pen, detail, hasPension: penYes, shown:{emp:showEmp,biz:showBiz,pension:penShown} };
 }
-
-// 기존 이혼 보정(엔진용) + 자녀수 포함
-function collectDivorceAdjust(){
-  const marital = $1('#maritalGrid .region-btn.active')?.dataset.marital || '';
-  if (marital !== 'divorced') return { marital, care: null, divorceKids:0, alimonyPay: 0, supportFromEx: 0 };
-  const care = $1('#divorceCareChips .chip.active')?.dataset.care || null;
-  return {
-    marital,
-    care,
-    divorceKids: (care==='self') ? getDivorceKids() : 0,
-    alimonyPay:  (care==='self') ? toNum($1('#alimonyPay')?.value) : 0,
-    supportFromEx: (care==='ex') ? toNum($1('#supportFromEx')?.value) : 0
-  };
-}
-
-// 자산(원자료)
-function collectAssets(){
-  const rent = $all('#propRentList .rent-item').map(it=>({
-    deposit: toNum($1('input[data-field="deposit"]', it)?.value),
-    monthly: toNum($1('input[data-field="monthly"]', it)?.value),
-    type: $1('.rent-type .chip.active', it)?.dataset.renttype || '' // home/work
-  }));
-  const jeonse = $all('#propJeonseList .jeonse-item').map(it=>({
-    deposit: toNum($1('input[data-field="deposit"]', it)?.value),
-    loan:    toNum($1('input[data-field="loan"]', it)?.value)
-  }));
-  const own = $all('#propOwnList .own-item').map(it=>({
-    price: toNum($1('input[data-field="price"]', it)?.value),
-    loan:  toNum($1('input[data-field="loan"]', it)?.value)
-  }));
-  const cars = $all('#carList .car-item').map(it=>({
-    price: toNum($1('input[data-field="price"]', it)?.value),
-    loan:  toNum($1('input[data-field="loan"]', it)?.value)
-  }));
-
-  return {
-    rent, jeonse, own, cars,
-    deposits:   toNum($1('#depositAmount')?.value),
-    insurance:  toNum($1('#insuranceAmount')?.value),
-    securities: toNum($1('#securitiesAmount')?.value)
-  };
-}
-
-// 자산 원자료 총합(청산가치 계산 전, 보고용)
-function sumAssetsRaw(a){
-  if (!a) return 0;
-  const rentDepSum   = (a.rent||[]).reduce((s,r)=> s + (Number(r.deposit)||0), 0);
-  const jeonseDepSum = (a.jeonse||[]).reduce((s,j)=> s + (Number(j.deposit)||0), 0);
-  const ownPriceSum  = (a.own||[]).reduce((s,o)=> s + (Number(o.price)||0), 0);
-  const carPriceSum  = (a.cars||[]).reduce((s,c)=> s + (Number(c.price)||0), 0);
-  const others       = Number(a.deposits||0) + Number(a.insurance||0) + Number(a.securities||0);
-  return rentDepSum + jeonseDepSum + ownPriceSum + carPriceSum + others;
-}
-
-// 채무
 function collectDebts(){
   const credit  = toNum($1('#debtCreditAmount')?.value);
   const tax     = toNum($1('#debtTaxAmount')?.value);
   const priv    = toNum($1('#debtPrivateAmount')?.value);
   const secured = toNum($1('#debtSecuredAmount')?.value);
-  return { byType:{ credit, tax, private: priv, secured }, total: credit + tax + priv + secured };
+  const unsecuredTotal = credit + tax + priv;
+  const allDebtTotal   = unsecuredTotal + secured;
+  return { byType:{ credit, tax, private: priv, secured }, total: allDebtTotal, unsecuredTotal, allDebtTotal };
 }
+function collectAssets(){
+  const rentRows = $all('#propRentList .rent-item').map(it=>{
+    const type = $1('.rent-type .chip.active', it)?.dataset.renttype || ''; // home/work
+    const typeLabel = type==='home' ? '거주지월세' : (type==='work' ? '사업장월세' : '');
+    return {
+      type, typeLabel,
+      deposit: toNum($1('input[data-field="deposit"]', it)?.value),
+      monthly: toNum($1('input[data-field="monthly"]', it)?.value)
+    };
+  });
+  const jeonseRows = $all('#propJeonseList .jeonse-item').map(it=>({
+    deposit: toNum($1('input[data-field="deposit"]', it)?.value),
+    loan:    toNum($1('input[data-field="loan"]', it)?.value)
+  }));
+  const ownRows = $all('#propOwnList .own-item').map(it=>({
+    price: toNum($1('input[data-field="price"]', it)?.value),
+    loan:  toNum($1('input[data-field="loan"]', it)?.value)
+  }));
+  const carRows = $all('#carList .car-item').map(it=>({
+    price: toNum($1('input[data-field="price"]', it)?.value),
+    loan:  toNum($1('input[data-field="loan"]', it)?.value)
+  }));
 
-// 지역/메타 + 모든 입력 모으기(엔진 호환 유지, 확장 필드 추가)
+  const deposits   = toNum($1('#depositAmount')?.value);
+  const insurance  = toNum($1('#insuranceAmount')?.value);
+  const securities = toNum($1('#securitiesAmount')?.value);
+
+  // 입력값 합계(현장판단 보조): 보증금/시세/예적금/환급금/증권 총합과 대출 총합, 월세는 별도
+  const sumDepositLike =
+    rentRows.reduce((s,r)=>s + Number(r.deposit||0), 0) +
+    jeonseRows.reduce((s,j)=>s + Number(j.deposit||0), 0) +
+    ownRows.reduce((s,o)=>s + Number(o.price||0), 0) +
+    Number(deposits||0) + Number(insurance||0) + Number(securities||0);
+  const sumLoans =
+    jeonseRows.reduce((s,j)=>s + Number(j.loan||0), 0) +
+    ownRows.reduce((s,o)=>s + Number(o.loan||0), 0) +
+    carRows.reduce((s,c)=>s + Number(c.loan||0), 0);
+  const sumRentMonthly = rentRows.reduce((s,r)=>s + Number(r.monthly||0), 0);
+
+  return {
+    rent: rentRows, jeonse: jeonseRows, own: ownRows, cars: carRows,
+    deposits, insurance, securities,
+    sums: { depositLike: sumDepositLike, loans: sumLoans, rentMonthly: sumRentMonthly }
+  };
+}
+function collectDivorceAdjust(){
+  const marital = $1('#maritalGrid .region-btn.active')?.dataset.marital || '';
+  const spouseRaw = $1('#spouseChips .chip.active')?.dataset.spouse || '';
+  const spouse = labelSpouse(spouseRaw);
+  const kidsMinor = (marital==='married') ? (getKidsCountMarried()||0) : 0;
+
+  if (marital !== 'divorced') {
+    return { marital, spouse, kidsMinor, care: null, alimonyPay: 0, supportFromEx: 0, kidsDirect: 0 };
+  }
+  const care = $1('#divorceCareChips .chip.active')?.dataset.care || null;
+  const alimonyPay = toNum($1('#alimonyPay')?.value);
+  const supportFromEx = toNum($1('#supportFromEx')?.value);
+  const kidsDirect = (care==='self') ? (getDivorceKids()||0) : 0;
+
+  return { marital, spouse, kidsMinor, care, alimonyPay, supportFromEx, kidsDirect };
+}
 function collectInput(){
-  const incomes  = collectIncomeDetailed();
-  const assets   = collectAssets();
-  const debts    = collectDebts();
-  const family   = collectFamily();
-  const divorce  = collectDivorceAdjust();
+  const income  = collectIncome();
+  const debts   = collectDebts();
+  const assets  = collectAssets();
+  const family  = collectDivorceAdjust();
 
   const homeRegion = $1('#regionGridHome .region-btn.active')?.dataset.region || '';
   let   homeCity   = $1('#regionDetailHome .city-btn.active')?.dataset.city || '';
@@ -166,22 +166,53 @@ function collectInput(){
   if (!homeCity && homeRegion === 'seoul') homeCity = '서울특별시';
   if (!workCity && workRegion === 'seoul') workCity = '서울특별시';
 
-  return {
-    meta: {
-      home: { region: homeRegion, city: homeCity },
-      work: { region: workRegion, city: workCity },
-      ageBand: $1('#ageGrid .region-btn.active')?.dataset.age || '',
-      marital: family.marital || '',
-      dischargeWithin5y: ($1('#dischargeGrid .region-btn.active')?.dataset.discharge === 'yes')
+  const meta = {
+    home: { region: homeRegion, city: homeCity },
+    work: { region: workRegion, city: workCity },
+    ageBand: $1('#ageGrid .region-btn.active')?.dataset.age || '',
+    marital: $1('#maritalGrid .region-btn.active')?.dataset.marital || '',
+    dischargeWithin5y: ($1('#dischargeGrid .region-btn.active')?.dataset.discharge === 'yes')
+  };
+
+  // 상세 라벨링 payload (텔레그램에서 그대로 사용)
+  const detail = {
+    regions: {
+      home:  { region: meta.home.region, city: meta.home.city },
+      work:  { region: meta.work.region, city: meta.work.city }
     },
+    ageLabel: labelAge(meta.ageBand),
+    incomes: income.detail,                         // [{type,label,amount,hasPension?}, ...]
+    incomeTotalSelected: income.total,
+    family,                                         // {marital(spelled), spouse, kidsMinor, care, alimonyPay, supportFromEx, kidsDirect}
+    assetsInput: {                                  // 원 입력값 전부
+      rent: assets.rent, jeonse: assets.jeonse, own: assets.own, cars: assets.cars,
+      deposits: assets.deposits, insurance: assets.insurance, securities: assets.securities,
+      sums: assets.sums
+    },
+    debtsInput: {                                   // 채무 상세 + 합계
+      credit: debts.byType.credit,
+      tax: debts.byType.tax,
+      private: debts.byType.private,
+      secured: debts.byType.secured,
+      unsecuredTotal: debts.unsecuredTotal,
+      allDebtTotal: debts.allDebtTotal
+    }
+  };
+
+  return {
+    meta,
     householdSize: getHouseholdSize(),
-    monthlyIncome: incomes.total,              // 엔진 호환
-    incomes,                                   // {emp,biz,pen,total,selected{...}}
-    family,                                    // {marital,kidsMarried,spouseJob,divorceCare,divorceKids,alimonyPay,supportFromEx}
-    assets,                                    // 원자료(월세/전세/자가/차/예금/보험/주식)
-    assetsRawTotal: sumAssetsRaw(assets),      // 보고용 총합(청산가치 전)
-    debts,                                     // {byType{}, total}
-    divorce                                    // 엔진 보정(이혼)용
+    monthlyIncome: income.total,
+    incomes: income,            // 기존 구조 유지
+    assets,
+    debts,
+    divorce: {                  // 엔진 호환(기존 필드 유지)
+      marital: meta.marital,
+      care: family.care,
+      alimonyPay: family.alimonyPay,
+      supportFromEx: family.supportFromEx
+    },
+    detail                        // ← 신규 상세 블록
   };
 }
 
@@ -208,7 +239,7 @@ function sendWebhook({ event, result, contact }) {
     page: location.href,
     referrer: document.referrer || '',
     ua: navigator.userAgent || '',
-    input: payload,
+    input: payload,                   // ← 상세 detail 포함
     result,
     contact: contact || null,
     at: Date.now()
